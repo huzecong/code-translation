@@ -1,0 +1,7 @@
+PyYAML
+psutil
+tqdm
+argtyped
+numpy
+torch >= 1.2.0
+texar-pytorch
