@@ -18,6 +18,9 @@ class FileProgress:
         self.f = f
         self.encoding = encoding
         self.file_size = os.fstat(f.fileno()).st_size
+        if "verbose" in kwargs:
+            del kwargs["verbose"]
+        kwargs.setdefault("bar_format", "{l_bar}{bar}| [{elapsed}<{remaining}]")
         self.progress_bar = tqdm.tqdm(total=self.file_size, **kwargs)
         self.size_read = 0
         self._next_tick = 1

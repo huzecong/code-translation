@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import texar.torch as tx
 import torch
@@ -16,7 +16,9 @@ class Transformer(tx.ModuleBase):
     for the full description of the model.
     """
 
-    def __init__(self, vocab: utils.Vocab, hparams=None):
+    vocab: utils.Vocab
+
+    def __init__(self, vocab: utils.Vocab, hparams: Optional[Dict[str, Any]] = None):
         super().__init__(hparams)
 
         self.vocab = vocab
@@ -31,7 +33,7 @@ class Transformer(tx.ModuleBase):
                 },
             })
         self.pos_embedder = tx.modules.SinusoidsPositionEmbedder(
-            position_size=self.config_data.max_decoding_length, hparams={"dim": hidden_dim})
+            position_size=self._hparams.max_sentence_length, hparams={"dim": hidden_dim})
 
         transformer_hparams = {
             "dim": hidden_dim,
@@ -53,26 +55,27 @@ class Transformer(tx.ModuleBase):
             output_layer=self.word_embedder.embedding, hparams=transformer_hparams)
 
         self.smoothed_loss_func = LabelSmoothingLoss(
-            label_confidence=self.config_model.loss_label_confidence,
+            label_confidence=self._hparams.loss_label_confidence,
             tgt_vocab_size=vocab.size, ignore_index=vocab.pad_id)
 
     @staticmethod
     def default_hparams():
         return {
             "hidden_dim": 512,
-            "max_decoding_length": 1024,
+            "max_sentence_length": 1024,
             "loss_label_confidence": 0.9,
         }
 
     def _embedding_fn(self, tokens: torch.LongTensor, positions: torch.LongTensor) -> torch.Tensor:
         word_embed = self.word_embedder(tokens)
-        scale = self.config_model.hidden_dim ** 0.5
+        scale = self._hparams.hidden_dim ** 0.5
         pos_embed = self.pos_embedder(positions)
         return word_embed * scale + pos_embed
 
     def forward(self,  # type: ignore
                 encoder_input: torch.Tensor, decoder_input: Optional[torch.LongTensor] = None,
-                labels: Optional[torch.LongTensor] = None, beam_width: Optional[int] = None):
+                labels: Optional[torch.LongTensor] = None,
+                beam_width: Optional[int] = None, length_penalty: float = 0.0):
         r"""Compute the maximum likelihood loss or perform decoding, depending
         on arguments.
 
@@ -119,13 +122,13 @@ class Transformer(tx.ModuleBase):
             return mle_loss
 
         else:
-            start_tokens = encoder_input.new_full((batch_size,), self.vocab.bos_token_id)
+            start_tokens = encoder_input.new_full((batch_size,), self.vocab.sos_id)
 
             predictions = self.decoder(
                 memory=encoder_output, memory_sequence_length=encoder_input_length,
-                beam_width=beam_width, length_penalty=self.config_model.length_penalty,
-                start_tokens=start_tokens, end_token=self.vocab.eos_token_id,
-                max_decoding_length=self.config_data.max_decoding_length,
+                beam_width=beam_width, length_penalty=length_penalty,
+                start_tokens=start_tokens, end_token=self.vocab.eos_id,
+                max_decoding_length=self._hparams.max_sentence_length,
                 decoding_strategy="infer_greedy")
             return predictions
 

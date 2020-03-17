@@ -20,13 +20,17 @@ class Args(Arguments):
     run_mode: Choices["train", "valid", "test"] = "train"
     output_dir: str = "outputs/"
     load_checkpoint: Switch = False
+    pdb: Switch = False
+    n_procs: int = 0
+    curriculum: Switch = True
 
 
 class ModelWrapper(nn.Module):
-    def __init__(self, model: Transformer, beam_width: int):
+    def __init__(self, model: Transformer, beam_width: int, length_penalty: float = 0.0):
         super().__init__()
         self.model = model
         self.beam_width = beam_width
+        self.length_penalty = length_penalty
 
     def forward(self,  # type: ignore
                 batch: tx.data.Batch) -> Dict[str, torch.Tensor]:
@@ -35,7 +39,8 @@ class ModelWrapper(nn.Module):
         return {"loss": loss}
 
     def predict(self, batch: tx.data.Batch) -> Dict[str, torch.Tensor]:
-        predictions = self.model(encoder_input=batch.source, beam_width=self.beam_width)
+        predictions = self.model(encoder_input=batch.source, beam_width=self.beam_width,
+                                 length_penalty=self.length_penalty)
         if self.beam_width == 1:
             decoded_ids = predictions[0].sample_id
         else:
@@ -45,6 +50,8 @@ class ModelWrapper(nn.Module):
 
 def main() -> None:
     args = Args()
+    if args.pdb:
+        utils.register_ipython_excepthook()
 
     with open(args.config_file) as f:
         config: Dict[str, Any] = yaml.safe_load(f)
@@ -57,18 +64,29 @@ def main() -> None:
         split: CodeData(
             path=os.path.join(config["data"]["filename_pattern"].format(split=split)),
             vocab=vocab,
-            hparams=({"shuffle": True, "curriculum": {"enable": True}} if split == "train" else
-                     {"shuffle": False, "curriculum": {"enable": False},
-                      "batch_size": config["training"]["test_batch_size"]})
-        ) for split in ["train", "dev", "test"]
+            hparams={
+                **config["data"].get("hparams", {}),
+                **(
+                    # hparams for training set.
+                    {"shuffle": True, "curriculum": {"enabled": args.curriculum},
+                     "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs}
+                    if split == "train" else
+                    # hparams for valid/test set.
+                    {"shuffle": False, "curriculum": {"enabled": False},
+                     "batch_size": config["training"]["test_batch_size"],
+                     "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1}
+                )
+            }
+        ) for split in ["train", "valid", "test"]
     }
     training_set = datasets["train"]
-    print(f"Training data size: {len(datasets['train'])}")
+    print("Data size:", {key: len(split) for key, split in datasets.items()})
     batching_strategy = CustomBatchingStrategy(config["training"]["max_batch_tokens"])
 
     # Create model and optimizer
     model = Transformer(vocab, hparams=config["model"])
-    model = ModelWrapper(model, config["inference"]["beam_width"])
+    model = ModelWrapper(model, beam_width=config["inference"]["beam_width"],
+                         length_penalty=config["inference"]["length_penalty"])
 
     lr_config = config["lr_scheduler"]
     is_static_lr = lr_config["schedule"] == "static"
@@ -89,13 +107,14 @@ def main() -> None:
         lr_scheduler=scheduler,
         log_destination=[sys.stdout, output_dir / "log.txt"],
         log_every=cond.iteration(training_config["display_steps"]),
-        validate_every=[cond.iteration(training_config["eval_steps"]), cond.epoch(1)],
+        validate_every=cond.iteration(training_config["eval_steps"]),
         stop_training_on=cond.iteration(training_config["max_train_steps"]),
-        train_metrics=[("loss", metric.RunningAverage(1)),  # only show current loss
+        train_metrics=[("loss", metric.RunningAverage(20)),  # average over 20 iterations
                        ("lr", metric.LR(optim))],
         log_format="{time} : Epoch {epoch:2d} @ {iteration:6d}it "
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
-        valid_metrics=utils.WordPieceBLEU(vocab, encoding=encoding),
+        valid_metrics=utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
+                                          sample_output_per=len(datasets["valid"]) // 10),
         test_metrics=[utils.FileBLEU(vocab, output_dir / "test.output", encoding=encoding),
                       ("unofficial_bleu", utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",
@@ -108,11 +127,11 @@ def main() -> None:
         show_live_progress=True,
     )
 
-    @executor.on(cond.epoch(1))
-    @executor.on_event(cond.Event.Training, 'begin')
+    @executor.on_event(cond.Event.Epoch, 'begin')
     def update_dataset_steps(exc: Executor):
         training_set.update_steps(exc.status["iteration"])
-        exc.write_log(f"Competency updated to {training_set.competency}")
+        exc._train_tracker.set_size(len(training_set))
+        exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {training_set.competency * 100:6.2f}%")
 
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":
@@ -124,7 +143,7 @@ def main() -> None:
         executor.train()
     else:
         executor.load(load_training_state=False)
-        split = "test" if args.run_mode == "test" else "dev"
+        split = "test" if args.run_mode == "test" else "valid"
         executor.test({split: datasets[split]})
 
 

@@ -1,5 +1,5 @@
 import weakref
-from typing import Generic, Iterable, Iterator, List, TypeVar, Union, Optional
+from typing import Generic, Iterable, Iterator, List, Optional, TypeVar, Union
 
 __all__ = [
     "LazyList", "chunk",

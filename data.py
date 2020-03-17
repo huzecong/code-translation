@@ -1,9 +1,10 @@
 import math
-from typing import List, NamedTuple, Optional, Tuple, TypeVar
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar
 
 import numpy as np
 import texar.torch as tx
 import torch
+from bashplotlib.histogram import plot_hist
 
 import utils
 
@@ -22,11 +23,12 @@ class Example(NamedTuple):
 class CodeDataSource(tx.data.DataSource[RawExample]):
     DELIMITER = " ▁|SEP|▁ "
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, verbose: bool = False):
         self.path = path
+        self.verbose = verbose
 
     def __iter__(self):
-        with open(self.path, "r") as f:
+        with utils.FileProgress(open(self.path, "r"), verbose=self.verbose, desc=f"Reading {self.path}") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -41,59 +43,35 @@ class CodeDataSource(tx.data.DataSource[RawExample]):
 
 class CodeData(tx.data.DatasetBase[RawExample, Example]):
     def __init__(self, path: str, vocab: utils.Vocab,
-                 hparams=None, device: Optional[torch.device] = None):
-        source = CodeDataSource(path)
-        source = tx.data.FilterDataSource(source, self._filter_fn)
+                 hparams: Optional[Dict[str, Any]] = None, device: Optional[torch.device] = None):
+        hparams = {
+            **(hparams or {}),
+            "lazy_strategy": "process",  # eager loading
+            "cache_strategy": "processed",
+        }
+        self._hparams = tx.HParams(hparams, self.default_hparams())
+
+        file_source = CodeDataSource(path, verbose=self._hparams.verbose)
+        file_source = tx.data.FilterDataSource(file_source, self._filter_fn)
+        if self._hparams.curriculum.enabled:
+            data = sorted(file_source, key=lambda ex: ex[2])  # sort by increasing difficulty score
+            source = tx.data.SequenceDataSource(data)
+            if self._hparams.verbose:
+                print("Data sorted. Difficulty histogram:")
+                # scores = [ex[2] for ex in data][:int(0.999 * len(data))]  # ignore outliers
+                scores = [ex[2] for ex in data]
+                plot_hist(scores, height=10, pch="x", xlab=True, showSummary=True, bincount=70)
+        else:
+            source = file_source
+
         self.vocab = vocab
-        hparams = (hparams or {}).update(
-            lazy_strategy="process",  # eager loading
-            cache_strategy="processed",
-        )
         super().__init__(source, hparams, device)
 
-        # At this point, all data is loaded from source and can be accessed through indexing `self._source`.
-        # Actual data length is `self._dataset_size`.
-        self._source = sorted(self._source, key=lambda ex: ex[2])  # sort by increasing difficulty score
-        self._sum_scores = sum(ex[2] for ex in self._source)
-
-        self._competency = 0
-        self._curriculum_dataset_size = 0  # current available dataset size
-        self._curriculum_sum_scores = 0  # sum of scores for current available data examples
-        self.update_steps(0)
-
-    def update_steps(self, steps: int):
-        r"""Update the current number of steps. This computes the new competency value and expands
-        the available dataset.
-        """
-        init_comp_sqr = self._hparams.curriculum.init_competency ** 2
-        anneal_steps = self._hparams.curriculum.steps
-        competency = min(1.0, math.sqrt((1 - init_comp_sqr) * steps / anneal_steps + init_comp_sqr))
-        assert self._competency <= competency
-        current_sum = self._curriculum_sum_scores
-        current_size = self._curriculum_dataset_size
-        target_sum = self._sum_scores * competency
-        while current_size < self._dataset_size:
-            score = self[current_size].score
-            if current_sum + score > target_sum:
-                break
-            current_sum += score
-            current_size += 1
-        self._competency = competency
-        self._curriculum_dataset_size = current_size
-        self._curriculum_sum_scores = current_sum
-
-    def __len__(self) -> int:
-        # Return length based on competency schedule.
-        return self._curriculum_dataset_size
-
-    def _filter_fn(self, example: RawExample) -> bool:
-        src, tgt, _ = example
-        src_len = src.find(" ") + 1  # count spaces instead of actually performing splitting
-        tgt_len = tgt.find(" ") + 1
-        lower, upper = self._hparams.valid_src_tgt_length_ratio
-        return (src_len <= self._hparams.max_src_len and
-                tgt_len <= self._hparams.max_tgt_len and
-                lower <= src_len / tgt_len <= upper)
+        if self._hparams.curriculum.enabled:
+            self._competency = 0
+            # Initialize current available dataset size to maximum, so we can know the actual size before training.
+            self._curriculum_dataset_size = self._dataset_size
+            self._hparams.shuffle_buffer_size = None
 
     @staticmethod
     def default_hparams():
@@ -105,11 +83,40 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             "lazy_strategy": "process",
             "cache_strategy": "processed",
             "curriculum": {
-                "enable": True,
+                "enabled": True,
                 "init_competency": 0.01,
                 "steps": 20000,
-            }
+            },
+            "shuffle_buffer_size": 4096,
+            "verbose": False,
         }
+
+    def update_steps(self, steps: int):
+        r"""Update the current number of steps. This computes the new competency value and expands
+        the available dataset.
+        """
+        init_comp_sqr = self._hparams.curriculum.init_competency ** 2
+        anneal_steps = self._hparams.curriculum.steps
+        competency = min(1.0, math.sqrt((1 - init_comp_sqr) * steps / anneal_steps + init_comp_sqr))
+        assert self._competency <= competency
+        new_size = int(competency * self._dataset_size)
+        self._competency = competency
+        self._curriculum_dataset_size = new_size
+
+    def __len__(self) -> int:
+        if self._hparams.curriculum.enabled:
+            # Return length based on competency schedule.
+            return self._curriculum_dataset_size
+        return super().__len__()
+
+    def _filter_fn(self, example: RawExample) -> bool:
+        src, tgt, _ = example
+        src_len = src.count(" ") + 1  # count spaces instead of actually performing splitting
+        tgt_len = tgt.count(" ") + 1
+        lower, upper = self._hparams.valid_src_tgt_length_ratio
+        return (src_len <= self._hparams.max_src_len and
+                tgt_len <= self._hparams.max_tgt_len and
+                lower <= src_len / tgt_len <= upper)
 
     def process(self, raw_example: RawExample) -> Example:
         # Convert to IDs and add EOS tokens.
@@ -127,6 +134,8 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         # Pad sentences to equal length.
         source, src_lens = tx.data.padded_batch(src_seqs, pad_value=self.vocab.eos_id)
         target_output, tgt_lens = tx.data.padded_batch(tgt_seqs, pad_value=self.vocab.eos_id)
+        # if source.shape[1] >= self._hparams.max_src_len or target_output.shape[1] >= self._hparams.max_tgt_len:
+        #     breakpoint()
         # Add SOS token to the target inputs.
         target_input = np.pad(target_output[:, :-1], ((0, 0), (1, 0)),
                               mode="constant", constant_values=self.vocab.sos_id)

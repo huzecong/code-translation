@@ -4,9 +4,14 @@ data:
   filename_pattern: "data/processed/{split}.txt"
   vocab_file: "data/vocab.vocab"
   encoding: "spm"
+  verbose: true
+  hparams:
+    max_src_len: 512
+    max_tgt_len: 512
 
 model:
   hidden_dim: 512
+  max_sentence_length: 512
   loss_label_confidence: 0.9
 
 lr_scheduler:
@@ -16,11 +21,11 @@ lr_scheduler:
 
 training:
   max_batch_tokens: 4096
-  test_batch_size: 32
+  test_batch_size: 16
 
   max_train_steps: 100000
   display_steps: 500
-  eval_steps: 2000
+  eval_steps: 5000
 
 inference:
   beam_width: 5

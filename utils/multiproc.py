@@ -1,10 +1,9 @@
 import contextlib
 import multiprocessing
-import os
 import threading
 import traceback
 import types
-from typing import Any, Callable, Iterator, List, Optional, TextIO, TypeVar, Union
+from typing import Any, Callable, Iterator, List, Optional, TextIO, TypeVar
 
 import psutil
 

@@ -1,9 +1,13 @@
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import List, Optional, Union
 
+from termcolor import colored
 from texar import torch as tx
 from texar.torch.run import metric
+
+from .override import write_log
+from .train import Vocab
 
 __all__ = [
     "FileBLEU",
@@ -12,7 +16,7 @@ __all__ = [
 
 
 class DecodeMixin:
-    vocab: tx.data.Vocab
+    vocab: Vocab
     perform_decode: bool
     encoding: Optional[str]
 
@@ -49,14 +53,12 @@ class DecodeMixin:
             words.append(''.join(pieces))
         return words
 
-    def _to_str(self, tokens: List[int]) -> str:
-        pos = next((idx for idx, x in enumerate(tokens)
-                    if x == self.vocab.eos_token_id), -1)
+    def _to_str(self, token_ids: List[int]) -> str:
+        pos = next((idx for idx, x in enumerate(token_ids) if x == self.vocab.eos_id), -1)
         if pos != -1:
-            tokens = tokens[:pos]
-        vocab_map = self.vocab.id_to_token_map_py
+            token_ids = token_ids[:pos]
 
-        words = [vocab_map[t] for t in tokens]
+        words = self.vocab.map_to_tokens(token_ids)
         if self.encoding is not None and self.perform_decode:
             if self.encoding == "bpe":
                 words = self.bpe_decode(words)
@@ -67,8 +69,7 @@ class DecodeMixin:
 
 
 class FileBLEU(metric.SimpleMetric[List[int], float], DecodeMixin):
-    def __init__(self, vocab: tx.data.Vocab, file_path: Optional[Union[str, Path]] = None,
-                 encoding: Optional[str] = None):
+    def __init__(self, vocab: Vocab, file_path: Optional[Union[str, Path]] = None, encoding: Optional[str] = None):
         super().__init__(pred_name="preds", label_name="target_output")
         self.vocab = vocab
         self.file_path = file_path
@@ -97,7 +98,12 @@ class FileBLEU(metric.SimpleMetric[List[int], float], DecodeMixin):
 
 
 class WordPieceBLEU(metric.BLEU, DecodeMixin):
-    def __init__(self, vocab: tx.data.Vocab, decode: bool = False, encoding: Optional[str] = None):
+    _examples_before_sample: int
+    _sample_cnt: int
+
+    def __init__(self, vocab: Vocab, decode: bool = False, encoding: Optional[str] = None,
+                 sample_output_per: Optional[int] = None):
+        self._sample_output_per = sample_output_per
         super().__init__(pred_name="preds", label_name="target_output")
         self.vocab = vocab
         self.perform_decode = decode
@@ -109,7 +115,19 @@ class WordPieceBLEU(metric.BLEU, DecodeMixin):
     def metric_name(self) -> str:
         return "BLEU"
 
+    def reset(self) -> None:
+        self._examples_before_sample = 0
+        self._sample_cnt = 0
+        super().reset()
+
     def add(self, predicted, labels) -> None:
         predicted = [self._to_str(s) for s in predicted]
         labels = [self._to_str(s) for s in labels]
         super().add(predicted, labels)
+        if self._sample_output_per is not None:
+            self._examples_before_sample -= len(predicted)
+            if self._examples_before_sample <= 0:
+                self._sample_cnt += 1
+                write_log(colored(f"Target {self._sample_cnt}: ", "green") + labels[0])
+                write_log(colored(f"Prediction {self._sample_cnt}: ", "red") + (predicted[0] or "<EMPTY>"))
+                self._examples_before_sample = self._sample_output_per

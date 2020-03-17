@@ -1,5 +1,5 @@
 import math
-from typing import Optional, Callable, List
+from typing import Callable, List, Optional
 
 __all__ = [
     "get_lr_schedule",
@@ -45,7 +45,7 @@ class Vocab:
             for line in f:
                 line = line.rstrip("\n")
                 if line:
-                    words.append(line)
+                    words.append(line.split()[0])
         return Vocab(words)
 
     @property

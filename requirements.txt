@@ -1,7 +1,9 @@
-PyYAML
-psutil
-tqdm
 argtyped
+bashplotlib
 numpy
-torch >= 1.2.0
+psutil
+PyYAML
 texar-pytorch
+termcolor
+torch >= 1.2.0
+tqdm

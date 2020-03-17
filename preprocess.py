@@ -91,7 +91,7 @@ def main():
     dev_split = all_indices[-(2 * test_size):-test_size]
     train_split = all_indices[:-(2 * test_size)]
 
-    for key, indices in {"train": train_split, "dev": dev_split, "test": test_split}.items():
+    for key, indices in {"train": train_split, "valid": dev_split, "test": test_split}.items():
         write_output_data(((data[idx], scores[idx]) for idx in indices),
                           os.path.join(args.output_path, f"{key}.txt"))
         print(f"{key.capitalize()} set written")
