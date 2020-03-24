@@ -1,3 +1,4 @@
+from .algorithm import *
 from .exception import *
 from .io import *
 from .iterator import *

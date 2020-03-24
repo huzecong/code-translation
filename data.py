@@ -50,25 +50,25 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             "cache_strategy": "processed",
         }
         self._hparams = tx.HParams(hparams, self.default_hparams())
+        self.vocab = vocab
 
         file_source = CodeDataSource(path, verbose=self._hparams.verbose)
         file_source = tx.data.FilterDataSource(file_source, self._filter_fn)
         if self._hparams.curriculum.enabled:
             data = sorted(file_source, key=lambda ex: ex[2])  # sort by increasing difficulty score
-            source = tx.data.SequenceDataSource(data)
             if self._hparams.verbose:
                 print("Data sorted. Difficulty histogram:")
                 # scores = [ex[2] for ex in data][:int(0.999 * len(data))]  # ignore outliers
                 scores = [ex[2] for ex in data]
                 plot_hist(scores, height=10, pch="x", xlab=True, showSummary=True, bincount=70)
         else:
-            source = file_source
+            data = list(file_source)
 
-        self.vocab = vocab
+        source = tx.data.SequenceDataSource(data)
         super().__init__(source, hparams, device)
 
+        self._competency = 100
         if self._hparams.curriculum.enabled:
-            self._competency = 0
             # Initialize current available dataset size to maximum, so we can know the actual size before training.
             self._curriculum_dataset_size = self._dataset_size
             self._hparams.shuffle_buffer_size = None
@@ -95,6 +95,8 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         r"""Update the current number of steps. This computes the new competency value and expands
         the available dataset.
         """
+        if not self._hparams.curriculum.enabled:
+            return  # do nothing
         init_comp_sqr = self._hparams.curriculum.init_competency ** 2
         anneal_steps = self._hparams.curriculum.steps
         competency = min(1.0, math.sqrt((1 - init_comp_sqr) * steps / anneal_steps + init_comp_sqr))
@@ -114,8 +116,8 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         src_len = src.count(" ") + 1  # count spaces instead of actually performing splitting
         tgt_len = tgt.count(" ") + 1
         lower, upper = self._hparams.valid_src_tgt_length_ratio
-        return (src_len <= self._hparams.max_src_len and
-                tgt_len <= self._hparams.max_tgt_len and
+        return (src_len + 1 <= self._hparams.max_src_len and  # account for EOS
+                tgt_len + 1 <= self._hparams.max_tgt_len and
                 lower <= src_len / tgt_len <= upper)
 
     def process(self, raw_example: RawExample) -> Example:
@@ -125,6 +127,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         src_seq.append(self.vocab.eos_id)
         tgt_seq = self.vocab.map_to_ids(tgt.split())
         tgt_seq.append(self.vocab.eos_id)
+        assert len(src_seq) <= self._hparams.max_src_len and len(tgt_seq) <= self._hparams.max_tgt_len
         return Example(src=src, tgt=tgt, score=score,
                        src_ids=np.asarray(src_seq), tgt_ids=np.asarray(tgt_seq))
 

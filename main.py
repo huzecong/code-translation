@@ -77,10 +77,8 @@ def main() -> None:
                      "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1}
                 )
             }
-        ) for split in ["train", "valid", "test"]
+        ) for split in (["train", "valid", "test"] if args.run_mode == "train" else [args.run_mode])
     }
-    training_set = datasets["train"]
-    print("Data size:", {key: len(split) for key, split in datasets.items()})
     batching_strategy = CustomBatchingStrategy(config["training"]["max_batch_tokens"])
 
     # Create model and optimizer
@@ -99,9 +97,9 @@ def main() -> None:
     training_config = config["training"]
     executor = Executor(
         model=model,
-        train_data=training_set,
-        valid_data=datasets["valid"],
-        test_data=datasets["test"],
+        train_data=datasets.get("train", None),
+        valid_data=datasets.get("valid", None),
+        test_data=datasets.get("test", None),
         batching_strategy=batching_strategy,
         optimizer=optim,
         lr_scheduler=scheduler,
@@ -127,11 +125,15 @@ def main() -> None:
         show_live_progress=True,
     )
 
-    @executor.on_event(cond.Event.Epoch, 'begin')
-    def update_dataset_steps(exc: Executor):
-        training_set.update_steps(exc.status["iteration"])
-        exc._train_tracker.set_size(len(training_set))
-        exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {training_set.competency * 100:6.2f}%")
+    executor.write_log("Data size: " + repr({key: len(split) for key, split in datasets.items()}))
+
+    if args.curriculum:
+        @executor.on_event(cond.Event.Epoch, 'begin')
+        def update_dataset_steps(exc: Executor):
+            training_set = datasets["train"]
+            training_set.update_steps(exc.status["iteration"])
+            exc._train_tracker.set_size(len(training_set))
+            exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {training_set.competency * 100:6.2f}%")
 
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":

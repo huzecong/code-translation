@@ -128,6 +128,6 @@ class WordPieceBLEU(metric.BLEU, DecodeMixin):
             self._examples_before_sample -= len(predicted)
             if self._examples_before_sample <= 0:
                 self._sample_cnt += 1
-                write_log(colored(f"Target {self._sample_cnt}: ", "green") + labels[0])
-                write_log(colored(f"Prediction {self._sample_cnt}: ", "red") + (predicted[0] or "<EMPTY>"))
+                write_log(colored(f"Target {self._sample_cnt}: ", "green") + labels[0], mode="info")
+                write_log(colored(f"Prediction {self._sample_cnt}: ", "red") + (predicted[0] or "<EMPTY>"), mode="info")
                 self._examples_before_sample = self._sample_output_per
