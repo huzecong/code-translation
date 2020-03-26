@@ -56,22 +56,15 @@ def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
 def color_match(a: str, b: str) -> Tuple[str, str]:
     a, b = a.split(), b.split()
     a_set = set(a)
-    f = utils.lcs_plan(a, b)
-    i, j = len(a), len(b)
-    while i > 0 and j > 0:
-        if f[i - 1, j - 1] + 1 == f[i, j] and a[i - 1] == b[j - 1]:
-            i, j = i - 1, j - 1
+    plan_a, plan_b = utils.lcs_plan(a, b)
+    for i in range(len(a)):
+        if plan_a[i]:
             a[i] = colored(a[i], "green")
-            b[j] = colored(b[j], "green")
-        elif f[i - 1, j] == f[i, j]:
-            i = i - 1
-        elif f[i, j - 1] == f[i, j]:
-            j = j - 1
-        else:
-            assert False
     for i in range(len(b)):
         if b[i] not in a_set:
             b[i] = colored(b[i], "red")
+        elif plan_b[i]:
+            b[i] = colored(b[i], "green")
     return " ".join(a), " ".join(b)
 
 
