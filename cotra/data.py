@@ -106,7 +106,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         init_comp_sqr = self._hparams.curriculum.init_competency ** 2
         anneal_steps = self._hparams.curriculum.steps
         competency = min(1.0, math.sqrt((1 - init_comp_sqr) * steps / anneal_steps + init_comp_sqr))
-        assert self._competency <= competency
+        # assert self._competency <= competency
         new_size = int(competency * self._dataset_size)
         self._competency = competency
         self._curriculum_dataset_size = new_size

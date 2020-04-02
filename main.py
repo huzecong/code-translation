@@ -7,6 +7,7 @@ import texar.torch as tx
 import torch
 import yaml
 from argtyped import *
+from termcolor import colored
 from texar.torch.run import *
 from torch import nn
 
@@ -21,6 +22,7 @@ class Args(Arguments):
     pdb: Switch = False
     n_procs: int = 0
     curriculum: Switch = True
+    debug: Switch = False
 
 
 class ModelWrapper(nn.Module):
@@ -50,11 +52,14 @@ def main() -> None:
     args = Args()
     if args.pdb:
         cotra.utils.register_ipython_excepthook()
+    if args.debug:
+        print(colored("Running in debug mode: no checkpoints or logs will be saved", "yellow"))
 
     with open(args.config_file) as f:
         config: Dict[str, Any] = yaml.safe_load(f)
 
     tx.run.make_deterministic(config["random_seed"])
+    print(f"Random seed set to {config['random_seed']}")
 
     # Load data
     vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
@@ -101,7 +106,7 @@ def main() -> None:
         batching_strategy=batching_strategy,
         optimizer=optim,
         lr_scheduler=scheduler,
-        log_destination=[sys.stdout, output_dir / "log.txt"],
+        log_destination=[sys.stdout] + ([output_dir / "log.txt"] if not args.debug else []),
         log_every=cond.iteration(training_config["display_steps"]),
         validate_every=cond.iteration(training_config["eval_steps"]),
         stop_training_on=cond.iteration(training_config["max_train_steps"]),
@@ -117,8 +122,8 @@ def main() -> None:
         test_progress_log_format=("{time} : Evaluating on test ({progress}%, {speed}), "
                                   "unofficial BLEU = {unofficial_bleu:.2f}"),
         validate_mode='predict',
-        checkpoint_dir=args.output_dir,
-        save_every=cond.validation(better=True),
+        checkpoint_dir=(args.output_dir if not args.debug else None),
+        save_every=(cond.validation(better=True) if not args.debug else None),
         max_to_keep=5,
         show_live_progress=True,
     )
