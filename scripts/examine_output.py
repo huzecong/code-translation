@@ -1,5 +1,7 @@
+import sys
 from typing import List, Tuple
 
+import numpy as np
 import texar.torch as tx
 from argtyped import *
 from termcolor import colored
@@ -68,6 +70,73 @@ def color_match(a: str, b: str) -> Tuple[str, str]:
     return " ".join(a), " ".join(b)
 
 
+def compute_edit_score(src: str, tgt: str, hyp: str,
+                       correct_copy_reward: float = 0.0, incorrect_copy_penalty: float = 0.0,
+                       normalize: bool = True) -> float:
+    r"""Compute the "edit score" given the source, ground-truth target, and hypothesis translation.
+
+    A normal LCS is equivalent to setting ``correct_copy_reward`` to 1 and ``incorrect_copy_penalty`` to 0.
+
+    :param src: The source sentence.
+    :param tgt: The target sentence.
+    :param hyp: The hypothesis sentence.
+    :param correct_copy_reward: The reward term for each correctly copied token (i.e, when a target token is
+        deemed as copied, and was correct in the hypothesis).
+    :param incorrect_copy_penalty: The penalty term for each incorrectly copied token (i.e, when a target token is
+        deemed as copied, but was incorrect in the hypothesis).
+    :param normalize: If ``True``, the score is normalized to [0, 1].
+    :return: The edit score.
+    """
+    if correct_copy_reward < 0.0:
+        raise ValueError("`correct_copy_reward` must be non-negative")
+    if incorrect_copy_penalty > 0.0:
+        raise ValueError("`incorrect_copy_penalty` must be non-positive")
+
+    src, tgt, hyp = src.split(), tgt.split(), hyp.split()
+    plan_src, plan_tgt = utils.lcs_plan(src, tgt, prioritize_beginning=True)
+    # Perform LCS DP on (tgt, hyp), penalizing positions with plan_tgt == True
+    score = compute_edit_score_given_plan(tgt, hyp, plan_tgt, correct_copy_reward, incorrect_copy_penalty, normalize)
+    return score
+
+
+def compute_edit_score_given_plan(tgt: List[str], hyp: List[str], plan_tgt: List[bool],
+                                  correct_copy_reward: float, incorrect_copy_penalty: float, normalize: bool) -> float:
+    n, m = len(tgt), len(hyp)
+    f = np.full((n + 1, m + 1), -np.inf, dtype=np.float32)
+    f[0][0] = 0.0
+    for i in range(n):
+        for j in range(m):
+            reward = correct_copy_reward if plan_tgt[i] else 1.0
+            penalty = incorrect_copy_penalty if plan_tgt[i] else 0.0
+            f[i + 1, j + 1] = max(
+                f[i, j + 1],
+                f[i + 1, j] + penalty,
+                f[i, j] + (reward if tgt[i] == hyp[j] else penalty)
+            )
+    score = f[n, m]
+    if normalize:
+        n_copy = sum(plan_tgt)
+        max_score = n_copy * correct_copy_reward + (n - n_copy)
+        min_score = incorrect_copy_penalty * n_copy
+        if max_score == min_score:
+            score = 1.0  # in this case, source is equivalent to target
+        else:
+            score = (score - min_score) / (max_score - min_score)
+    return score
+
+
+def batch_compute_edit_score(src: str, tgt: str, hyp: str,
+                             reward_and_penalty: List[Tuple[float, float]],
+                             normalize: bool = True) -> List[float]:
+    src, tgt, hyp = src.split(), tgt.split(), hyp.split()
+    plan_src, plan_tgt = utils.lcs_plan(src, tgt, prioritize_beginning=True)
+    scores = []
+    for reward, penalty in reward_and_penalty:
+        score = compute_edit_score_given_plan(tgt, hyp, plan_tgt, reward, penalty, normalize)
+        scores.append(score)
+    return scores
+
+
 def main():
     args = Args()
     src_data, tgt_data = read_pairs(args.data_file, decode=True)
@@ -83,21 +152,30 @@ def main():
     # assert tgt_data == ref_data
     assert len(src_data) == len(tgt_data) == len(ref_data) == len(hyp_data) == len(overlap_scores)
 
-    scores = []
-    for ref, hyp in zip(ref_data, hyp_data):
+    bleu_scores = []
+    edit_scores = []
+    for src, ref, hyp in zip(tqdm(src_data, desc="Computing scores"), ref_data, hyp_data):
         bleu4 = tx.evals.sentence_bleu([ref], hyp, max_order=4, smooth=True)
         bleu8 = tx.evals.sentence_bleu([ref], hyp, max_order=8, smooth=True)
-        scores.append((bleu4, bleu8))
+        bleu_scores.append((bleu4, bleu8))
+        edit_neu, edit_pos, edit_neg = batch_compute_edit_score(
+            src, ref, hyp, reward_and_penalty=[(0.0, 0.0), (0.5, 0.0), (0.0, -0.5)])
+        edit_scores.append((edit_neu, edit_pos, edit_neg))
 
-    indices = sorted(range(len(src_data)), key=lambda i: scores[i][0])
+    from IPython import embed
+    embed()
+
+    sys.exit(0)
+
+    indices = sorted(range(len(src_data)), key=lambda i: bleu_scores[i][0])
     with open(args.output_file, "w") as f:
-        for idx in tqdm(indices):
+        for idx in tqdm(indices, desc="Writing output"):
             src = src_data[idx]
             ref = ref_data[idx]
             hyp = hyp_data[idx]
             overlap_score = overlap_scores[idx]
             ref, hyp = color_match(ref, hyp)
-            bleu4, bleu8 = scores[idx]
+            bleu4, bleu8 = bleu_scores[idx]
             f.write(colored(f"Example {idx} (BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}), "
                             f"overlap with train = ", "yellow") +
                     colored(f"{overlap_score:.3f}", "red" if overlap_score > 0.8 else "yellow") + "\n")

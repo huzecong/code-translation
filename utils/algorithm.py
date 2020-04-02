@@ -29,8 +29,8 @@ def lcs_plan(a: List[T], b: List[T], prioritize_beginning: bool = False) -> Tupl
     while i > 0 and j > 0:
         if f[i - 1, j - 1] + 1 == f[i, j] and a[i - 1] == b[j - 1]:
             i, j = i - 1, j - 1
-            a[i] = True
-            b[j] = True
+            plan_a[i] = True
+            plan_b[j] = True
         elif f[i - 1, j] == f[i, j]:
             i = i - 1
         elif f[i, j - 1] == f[i, j]:
