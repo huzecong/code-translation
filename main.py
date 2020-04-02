@@ -10,9 +10,7 @@ from argtyped import *
 from texar.torch.run import *
 from torch import nn
 
-import utils
-from data import CodeData, CustomBatchingStrategy
-from model import Transformer
+import cotra
 
 
 class Args(Arguments):
@@ -26,7 +24,7 @@ class Args(Arguments):
 
 
 class ModelWrapper(nn.Module):
-    def __init__(self, model: Transformer, beam_width: int, length_penalty: float = 0.0):
+    def __init__(self, model: cotra.Transformer, beam_width: int, length_penalty: float = 0.0):
         super().__init__()
         self.model = model
         self.beam_width = beam_width
@@ -51,7 +49,7 @@ class ModelWrapper(nn.Module):
 def main() -> None:
     args = Args()
     if args.pdb:
-        utils.register_ipython_excepthook()
+        cotra.utils.register_ipython_excepthook()
 
     with open(args.config_file) as f:
         config: Dict[str, Any] = yaml.safe_load(f)
@@ -59,9 +57,9 @@ def main() -> None:
     tx.run.make_deterministic(config["random_seed"])
 
     # Load data
-    vocab = utils.Vocab.load(config["data"]["vocab_file"])
-    datasets: Dict[str, CodeData] = {
-        split: CodeData(
+    vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
+    datasets: Dict[str, cotra.CodeData] = {
+        split: cotra.CodeData(
             path=os.path.join(config["data"]["filename_pattern"].format(split=split)),
             vocab=vocab,
             hparams={
@@ -79,16 +77,16 @@ def main() -> None:
             }
         ) for split in (["train", "valid", "test"] if args.run_mode == "train" else [args.run_mode])
     }
-    batching_strategy = CustomBatchingStrategy(config["training"]["max_batch_tokens"])
+    batching_strategy = cotra.PairedTextTokenCountBatchingStrategy(config["training"]["max_batch_tokens"])
 
     # Create model and optimizer
-    model = Transformer(vocab, hparams=config["model"])
+    model = cotra.Transformer(vocab, hparams=config["model"])
     model = ModelWrapper(model, beam_width=config["inference"]["beam_width"],
                          length_penalty=config["inference"]["length_penalty"])
 
     lr_config = config["lr_scheduler"]
     is_static_lr = lr_config["schedule"] == "static"
-    scheduler_lambda = utils.get_lr_schedule(static=is_static_lr, warmup_steps=lr_config["warmup_steps"])
+    scheduler_lambda = cotra.utils.get_lr_schedule(static=is_static_lr, warmup_steps=lr_config["warmup_steps"])
     optim = torch.optim.Adam(model.parameters(), lr=lr_config["init_lr"], betas=(0.9, 0.997), eps=1e-9)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optim, scheduler_lambda)
 
@@ -111,10 +109,10 @@ def main() -> None:
                        ("lr", metric.LR(optim))],
         log_format="{time} : Epoch {epoch:2d} @ {iteration:6d}it "
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
-        valid_metrics=utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
-                                          sample_output_per=len(datasets["valid"]) // 10),
-        test_metrics=[utils.FileBLEU(vocab, output_dir / "test.output", encoding=encoding),
-                      ("unofficial_bleu", utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
+        valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
+                                                sample_output_per=len(datasets["valid"]) // 10),
+        test_metrics=[cotra.utils.FileBLEU(vocab, output_dir / "test.output", encoding=encoding),
+                      ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",
         test_progress_log_format=("{time} : Evaluating on test ({progress}%, {speed}), "
                                   "unofficial BLEU = {unofficial_bleu:.2f}"),

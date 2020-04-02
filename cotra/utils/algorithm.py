@@ -1,4 +1,5 @@
-from typing import List, TypeVar, Tuple
+from typing import List, Tuple, TypeVar
+
 import numpy as np
 
 __all__ = [

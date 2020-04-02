@@ -4,7 +4,11 @@ import texar.torch as tx
 import torch
 from torch import nn
 
-import utils
+from . import utils
+
+__all__ = [
+    "Transformer",
+]
 
 
 class Transformer(tx.ModuleBase):

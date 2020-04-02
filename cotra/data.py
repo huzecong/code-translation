@@ -6,7 +6,13 @@ import texar.torch as tx
 import torch
 from bashplotlib.histogram import plot_hist
 
-import utils
+from . import utils
+
+__all__ = [
+    "Example",
+    "CodeData",
+    "PairedTextTokenCountBatchingStrategy",
+]
 
 T = TypeVar('T')
 RawExample = Tuple[str, str, float]
@@ -157,7 +163,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         return self._competency
 
 
-class CustomBatchingStrategy(tx.data.BatchingStrategy[Example]):
+class PairedTextTokenCountBatchingStrategy(tx.data.BatchingStrategy[Example]):
     r"""Create dynamically-sized batches for paired text data so that the total
     number of source and target tokens (including padding) inside each batch is
     constrained.

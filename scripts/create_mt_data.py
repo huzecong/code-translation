@@ -1,12 +1,12 @@
 import random
 from pathlib import Path
-from typing import List, Set, Tuple, TypeVar, Optional
+from typing import List, Optional, Set, Tuple, TypeVar
 
 import argtyped
 import ujson
 from argtyped import Switch
 
-import ghcc
+import cotra
 
 
 class Arguments(argtyped.Arguments):
@@ -45,13 +45,13 @@ def write_paired_text(data: List[Tuple[str, str]], prefix: Path) -> None:
 
 
 def main():
-    ghcc.utils.register_ipython_excepthook()
+    cotra.utils.register_ipython_excepthook()
 
     args = Arguments()
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
 
-    ghcc.log("Dataset creation start")
+    print("Dataset creation start")
 
     original_code_set: Set[str] = set()
     total_cnt = 0
@@ -66,7 +66,7 @@ def main():
         assert len(src_data) == len(tgt_data)
         data = list(zip(src_data, tgt_data))
 
-        ghcc.log(f"Loaded {len(data)} examples")
+        print(f"Loaded {len(data)} examples")
     else:
         for file in input_dir.iterdir():
             with file.open() as f:
@@ -90,11 +90,11 @@ def main():
                     original_code_set.add(original_code)
                 file_cnt += 1
                 if file_cnt % 200 == 0:
-                    ghcc.log(f"Processed {file_cnt} files")
+                    print(f"Processed {file_cnt} files")
                 if args.max_files is not None and file_cnt >= args.max_files:
                     break
 
-        ghcc.log(f"Found {total_cnt} examples ({len(data)} unique examples)", "success")
+        print(f"Found {total_cnt} examples ({len(data)} unique examples)", "success")
         write_paired_text(data, output_dir / "all")
 
     random.seed(args.random_seed)
@@ -103,7 +103,7 @@ def main():
     datasets = split_data(data, [args.train_split, args.dev_split, args.test_split])
     for dataset, path in zip(datasets, ["train", "dev", "test"]):
         write_paired_text(dataset, output_dir / path)
-        ghcc.log(f"{path.capitalize()} set written", "success")
+        print(f"{path.capitalize()} set written", "success")
 
 
 if __name__ == '__main__':

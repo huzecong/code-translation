@@ -2,11 +2,10 @@ from argtyped import Arguments
 from bashplotlib.histogram import plot_hist
 from tqdm import tqdm
 
+import cotra
+
 import sys
-
 sys.path.append(".")
-
-import utils
 from examine_output import read_pairs
 
 
@@ -41,7 +40,7 @@ def main():
             breakpoint()
             continue
         test_sent = test_sent.split()
-        max_overlap, cand_sent = max((utils.lcs(test_sent, cand) / max(len(test_sent), len(cand)), cand)
+        max_overlap, cand_sent = max((cotra.utils.lcs(test_sent, cand) / max(len(test_sent), len(cand)), cand)
                                      for cand in candidates)
         if max_overlap > 0.8:
             # progress.write(" ".join(test_sent))

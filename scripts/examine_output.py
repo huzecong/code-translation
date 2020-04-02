@@ -1,4 +1,3 @@
-import sys
 from typing import List, Tuple
 
 import numpy as np
@@ -7,9 +6,8 @@ from argtyped import *
 from termcolor import colored
 from tqdm import tqdm
 
-import utils
-from data import CodeDataSource
-from utils.metric import DecodeMixin
+import cotra
+from cotra.utils.metric import DecodeMixin
 
 
 class Args(Arguments):
@@ -31,8 +29,7 @@ def read_lines(path: str) -> List[str]:
 
 
 def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
-    def _filter_fn(example) -> bool:
-        src, tgt, _ = example
+    def _filter_fn(src: str, tgt: str) -> bool:
         src_len = src.count(" ") + 1  # count spaces instead of actually performing splitting
         tgt_len = tgt.count(" ") + 1
         lower, upper = 0.5, 3.0
@@ -43,10 +40,10 @@ def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
     lines = read_lines(path)
     src_data, tgt_data = [], []
     for line in lines:
-        example = line.split(CodeDataSource.DELIMITER)
-        if not _filter_fn(example):
-            continue
+        example = line.split(cotra.data.CodeDataSource.DELIMITER)
         src, tgt, _ = example
+        if not _filter_fn(src, tgt):
+            continue
         if decode:
             src = " ".join(DecodeMixin.spm_decode(src.split()))
             tgt = " ".join(DecodeMixin.spm_decode(tgt.split()))
@@ -58,7 +55,7 @@ def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
 def color_match(a: str, b: str) -> Tuple[str, str]:
     a, b = a.split(), b.split()
     a_set = set(a)
-    plan_a, plan_b = utils.lcs_plan(a, b)
+    plan_a, plan_b = cotra.utils.lcs_plan(a, b)
     for i in range(len(a)):
         if plan_a[i]:
             a[i] = colored(a[i], "green")
@@ -93,7 +90,7 @@ def compute_edit_score(src: str, tgt: str, hyp: str,
         raise ValueError("`incorrect_copy_penalty` must be non-positive")
 
     src, tgt, hyp = src.split(), tgt.split(), hyp.split()
-    plan_src, plan_tgt = utils.lcs_plan(src, tgt, prioritize_beginning=True)
+    plan_src, plan_tgt = cotra.utils.lcs_plan(src, tgt, prioritize_beginning=True)
     # Perform LCS DP on (tgt, hyp), penalizing positions with plan_tgt == True
     score = compute_edit_score_given_plan(tgt, hyp, plan_tgt, correct_copy_reward, incorrect_copy_penalty, normalize)
     return score
@@ -129,7 +126,7 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
                              reward_and_penalty: List[Tuple[float, float]],
                              normalize: bool = True) -> List[float]:
     src, tgt, hyp = src.split(), tgt.split(), hyp.split()
-    plan_src, plan_tgt = utils.lcs_plan(src, tgt, prioritize_beginning=True)
+    plan_src, plan_tgt = cotra.utils.lcs_plan(src, tgt, prioritize_beginning=True)
     scores = []
     for reward, penalty in reward_and_penalty:
         score = compute_edit_score_given_plan(tgt, hyp, plan_tgt, reward, penalty, normalize)
@@ -161,11 +158,6 @@ def main():
         edit_neu, edit_pos, edit_neg = batch_compute_edit_score(
             src, ref, hyp, reward_and_penalty=[(0.0, 0.0), (0.5, 0.0), (0.0, -0.5)])
         edit_scores.append((edit_neu, edit_pos, edit_neg))
-
-    from IPython import embed
-    embed()
-
-    sys.exit(0)
 
     indices = sorted(range(len(src_data)), key=lambda i: bleu_scores[i][0])
     with open(args.output_file, "w") as f:
