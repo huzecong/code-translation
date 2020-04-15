@@ -1,6 +1,7 @@
 import math
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar
 
+import flutes
 import numpy as np
 import texar.torch as tx
 import torch
@@ -34,7 +35,7 @@ class CodeDataSource(tx.data.DataSource[RawExample]):
         self.verbose = verbose
 
     def __iter__(self):
-        with utils.FileProgress(open(self.path, "r"), verbose=self.verbose, desc=f"Reading {self.path}") as f:
+        with flutes.FileProgress(open(self.path, "r"), verbose=self.verbose, desc=f"Reading {self.path}") as f:
             for line in f:
                 line = line.strip()
                 if not line:

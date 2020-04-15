@@ -1,5 +1,6 @@
 argtyped
 bashplotlib
+flutes
 numpy
 psutil
 PyYAML

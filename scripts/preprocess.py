@@ -6,10 +6,9 @@ import random
 from collections import Counter
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
+import flutes
 import tqdm
 from argtyped import *
-
-import utils
 
 
 class Args(Arguments):
@@ -35,7 +34,7 @@ OutputData = Tuple[str, str, float]
 
 
 def read_paired_data(src_file: str, tgt_file: str) -> Iterator[InputData]:
-    with utils.FileProgress(open(src_file), desc="Reading file") as f_src, open(tgt_file) as f_tgt:
+    with flutes.FileProgress(open(src_file), desc="Reading file") as f_src, open(tgt_file) as f_tgt:
         for src, tgt in itertools.zip_longest(f_src, f_tgt):
             if src is None or tgt is None:
                 raise ValueError("Source and target files have different lengths")
@@ -67,17 +66,17 @@ def main():
     args = Args()
     random.seed(args.random_seed)
     os.makedirs(args.output_path, exist_ok=True)
-    data = utils.LazyList(read_paired_data(args.src_path, args.tgt_path))
+    data = flutes.LazyList(read_paired_data(args.src_path, args.tgt_path))
 
     word_counter = Counter()
-    data_chunks = utils.chunk(map(lambda xs: xs[0], data), args.block_size)  # use only the source sentence
-    with utils.safe_pool(args.n_procs) as pool:
+    data_chunks = flutes.chunk(map(lambda xs: xs[0], data), args.block_size)  # use only the source sentence
+    with flutes.safe_pool(args.n_procs) as pool:
         for counter in pool.imap_unordered(count_words, data_chunks):
             word_counter.update(counter)
 
     total_words = sum(word_counter.values())
     word_scores = {w: -math.log(c / total_words) for w, c in word_counter.items()}
-    with utils.safe_pool(args.n_procs) as pool:
+    with flutes.safe_pool(args.n_procs) as pool:
         scores = list(pool.imap(functools.partial(compute_score, word_scores),
                                 tqdm.tqdm(data, desc="Computing scores"), chunksize=args.block_size))
 

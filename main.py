@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+import flutes
 import texar.torch as tx
 import torch
 import yaml
@@ -51,7 +52,7 @@ class ModelWrapper(nn.Module):
 def main() -> None:
     args = Args()
     if args.pdb:
-        cotra.utils.register_ipython_excepthook()
+        flutes.register_ipython_excepthook()
     if args.debug:
         print(colored("Running in debug mode: no checkpoints or logs will be saved", "yellow"))
 

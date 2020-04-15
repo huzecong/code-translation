@@ -3,10 +3,9 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple, TypeVar
 
 import argtyped
+import flutes
 import ujson
 from argtyped import Switch
-
-import cotra
 
 
 class Arguments(argtyped.Arguments):
@@ -45,7 +44,7 @@ def write_paired_text(data: List[Tuple[str, str]], prefix: Path) -> None:
 
 
 def main():
-    cotra.utils.register_ipython_excepthook()
+    flutes.register_ipython_excepthook()
 
     args = Arguments()
     input_dir = Path(args.input_dir)
