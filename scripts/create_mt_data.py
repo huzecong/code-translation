@@ -1,9 +1,15 @@
-import random
+import functools
+import multiprocessing as mp
+import os
+import pickle
+import sys
 from pathlib import Path
-from typing import List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
 
 import argtyped
 import flutes
+import ghcc
+import tqdm
 import ujson
 from argtyped import Switch
 
@@ -11,98 +17,146 @@ from argtyped import Switch
 class Arguments(argtyped.Arguments):
     input_dir: str = "match_output/"
     output_dir: str = "mt_data/"
-    # vocab_size: int = 32000
-    # use_bpe: Switch = True
-    max_files: Optional[int]
-    resplit: Switch = False
-    train_split: float = 0.98
-    dev_split: float = 0.01
-    test_split: float = 0.01
-    random_seed: int = 19260817
+    max_repos: Optional[int]
+    quiet: Switch = False
+    n_procs: int = 4
+    queue_size: int = 1024
+    block_size: int = 10000
 
 
-T = TypeVar('T')
+class RepoInfo(NamedTuple):
+    repo_owner: str
+    repo_name: str
 
 
-def split_data(data: List[T], portion: List[float]) -> List[List[T]]:
-    sum_portion = sum(portion)
-    pref_por = [0.0]
-    for p in portion:
-        pref_por.append(pref_por[-1] + p / sum_portion)
-    pref_por[-1] = 1.0
-    bounds = [int(len(data) * p) for p in pref_por]
-    return [data[l:r] for l, r in zip(bounds, bounds[1:])]
+class _Example(NamedTuple):
+    decompiled_code: str
+    original_code: str
+    decompiled_ast: Dict[str, Any]
+    original_ast: Dict[str, Any]
+    repo: str  # "owner/name"
+    sha: str
 
 
-def write_paired_text(data: List[Tuple[str, str]], prefix: Path) -> None:
-    with prefix.with_suffix(".src").open("w") as f:
-        for src, _ in data:
-            f.write(src + "\n")
-    with prefix.with_suffix(".tgt").open("w") as f:
-        for _, tgt in data:
-            f.write(tgt + "\n")
+SEP = "\0"
+END_SIGNATURE = b"END_REPO"
+PICKLE_PROTOCOL = 4
+
+QueueElem = bytes
+
+
+def convert_ast(node):
+    # `bytes` are smaller when pickled; all keys are ASCII.
+    # However, protocol 4 introduced a "short-string" opcode, so this is no longer necessary.
+    if isinstance(node, dict):
+        ret = {k.encode("ascii"): convert_ast(v) for k, v in node.items()}
+        typ = ret.get(b"_t", None)
+        if typ is not None:
+            ret[b"_t"] = typ.encode("ascii")
+        return ret
+    elif isinstance(node, list):
+        return [convert_ast(c) for c in node]
+    else:
+        return node
+
+
+def convert_code(code: List[str]) -> str:
+    code_str = SEP.join(code)
+    return code_str
+
+
+def exception_handler(e: Exception, repo_info: RepoInfo, queue: 'mp.Queue[QueueElem]'):
+    repo = f"{repo_info.repo_owner}/{repo_info.repo_name}"
+    flutes.log_exception(e, f"Exception occurred when processing {repo}", force_console=True)
+    queue.put(END_SIGNATURE)
+
+
+@flutes.exception_wrapper(exception_handler)
+def process(repo_info: RepoInfo, data_dir: str, queue: 'mp.Queue[QueueElem]') -> None:
+    repo = f"{repo_info.repo_owner}/{repo_info.repo_name}"
+    with open(os.path.join(data_dir, repo_info.repo_owner, repo_info.repo_name, "matched_funcs.jsonl")) as f:
+        for line in f:
+            if not line:
+                continue
+            matched_func = ujson.loads(line)
+            decompiled_code = convert_code(matched_func['decompiled_tokens'])
+            original_code = convert_code(matched_func['original_tokens'])
+            decompiled_ast = matched_func['decompiled_ast_json']
+            original_ast = matched_func['original_ast_json']
+            sha = matched_func['binary_hash']
+            # Dump it here; otherwise the queue thread will do all the dumping.
+            example = pickle.dumps((decompiled_code, original_code, decompiled_ast, original_ast, repo, sha),
+                                   protocol=PICKLE_PROTOCOL)
+            queue.put(example)
+    queue.put(END_SIGNATURE)
 
 
 def main():
-    flutes.register_ipython_excepthook()
+    # flutes.register_ipython_excepthook()
 
+    sys.setrecursionlimit(50000)
     args = Arguments()
-    input_dir = Path(args.input_dir)
+
     output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    flutes.log("Dataset creation start")
 
-    print("Dataset creation start")
-
+    db = ghcc.MatchFuncDB()
     original_code_set: Set[str] = set()
-    total_cnt = 0
-    file_cnt = 0
-    data: List[Tuple[str, str]] = []
+    n_duplicate = 0
+    n_examples = 0
+    manager = mp.Manager()
+    example_queue: 'mp.Queue[QueueElem]' = manager.Queue(args.queue_size)
+    with flutes.safe_pool(args.n_procs, closing=[db]) as pool:
+        repos = [RepoInfo(entry['repo_owner'], entry['repo_name'])
+                 for entry in db.collection.find() if entry['funcs_matched'] > 0]
+        if args.max_repos is not None:
+            repos = repos[:args.max_repos]
+        process_fn: Callable[[RepoInfo], None] = functools.partial(
+            process, data_dir=args.input_dir, queue=example_queue)
+        pool.map_async(process_fn, repos, error_callback=flutes.log_exception)
+        end_signals = 0
+        progress = tqdm.tqdm(total=len(repos))
+        file_cnt = 0
+        text_data = []
+        ast_data = []
 
-    if args.resplit and (output_dir / "all.src").exists():
-        with (output_dir / "all.src").open() as f:
-            src_data = [line.strip() for line in f if line]
-        with (output_dir / "all.tgt").open() as f:
-            tgt_data = [line.strip() for line in f if line]
-        assert len(src_data) == len(tgt_data)
-        data = list(zip(src_data, tgt_data))
+        def save_file():
+            nonlocal file_cnt, text_data, ast_data
+            # Save text & AST separately
+            with (output_dir / f"data_text_{file_cnt:03d}.pkl").open("wb") as f:
+                pickle.dump(text_data, f, protocol=PICKLE_PROTOCOL)
+            with (output_dir / f"data_ast_{file_cnt:03d}.pkl").open("wb") as f:
+                pickle.dump(ast_data, f, protocol=PICKLE_PROTOCOL)
+            progress.write(f"Saved part {file_cnt:03d}")
+            text_data = []
+            ast_data = []
+            file_cnt += 1
 
-        print(f"Loaded {len(data)} examples")
-    else:
-        for file in input_dir.iterdir():
-            with file.open() as f:
-                for line in f:
-                    if not line:
-                        continue
-                    try:
-                        matched_func = ujson.loads(line)
-                    except Exception:
-                        continue
-                    if isinstance(matched_func["original_code"], str):
-                        continue
-                    if "\n" in matched_func["original_code"] or "\n" in matched_func["decompiled_code"]:
-                        breakpoint()
-                    total_cnt += 1
-                    original_code = " ".join(matched_func["original_code"])
-                    if original_code in original_code_set:
-                        continue
-                    decompiled_code = " ".join(matched_func["decompiled_code"])
-                    data.append((decompiled_code, original_code))  # (src, tgt)
-                    original_code_set.add(original_code)
-                file_cnt += 1
-                if file_cnt % 200 == 0:
-                    print(f"Processed {file_cnt} files")
-                if args.max_files is not None and file_cnt >= args.max_files:
-                    break
+        while end_signals < len(repos):
+            elem = example_queue.get()
+            if elem == END_SIGNATURE:
+                progress.update(1)
+                end_signals += 1
+                continue
 
-        print(f"Found {total_cnt} examples ({len(data)} unique examples)", "success")
-        write_paired_text(data, output_dir / "all")
+            ex = pickle.loads(elem)
+            original_code = ex[1]
+            if original_code not in original_code_set:
+                original_code_set.add(original_code)
+                text_data.append((ex[0], ex[1], ex[4], ex[5]))  # (decompiled, orig, repo, sha)
+                ast_data.append((ex[2], ex[3]))
+                n_examples += 1
+            else:
+                n_duplicate += 1
+            progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
+            if (n_examples + n_duplicate) % 100 == 0:
+                progress.refresh()
+            if len(text_data) >= args.block_size:
+                save_file()
 
-    random.seed(args.random_seed)
-    random.shuffle(data)
-
-    datasets = split_data(data, [args.train_split, args.dev_split, args.test_split])
-    for dataset, path in zip(datasets, ["train", "dev", "test"]):
-        write_paired_text(dataset, output_dir / path)
-        print(f"{path.capitalize()} set written", "success")
+        if len(text_data) > 0:
+            save_file()
 
 
 if __name__ == '__main__':
