@@ -4,6 +4,7 @@ flutes
 numpy
 psutil
 PyYAML
+sentencepiece
 texar-pytorch
 termcolor
 torch >= 1.2.0
