@@ -67,57 +67,35 @@ def tokenize(sentence: str) -> Iterator[str]:
             yield tok
 
 
-def count_words(sentences: List[str]) -> 'Counter[str]':
-    counter = Counter()
-    for sent in sentences:
-        counter.update(tokenize(sent))
-    return counter
+class CountWordsState(flutes.PoolState):
+    def __init__(self):
+        self.counter = Counter()
+
+    def count_words(self, sentence: str) -> None:
+        self.counter.update(tokenize(sentence))
 
 
-def compute_score(word_scores: Dict[str, float], example: InputData) -> float:
-    # Compute score for source sentence.
-    score = sum(word_scores.get(w, 0.0) for w in tokenize(example.decompiled_code))
-    return score
+class ComputeScoreState(flutes.PoolState):
+    def __init__(self, word_scores: Dict[str, float]) -> None:
+        self.word_scores = word_scores
+
+    def compute_score(self, code: str) -> float:
+        word_scores = self.word_scores
+        return sum(word_scores.get(w, 0.0) for w in tokenize(code))
 
 
-class ComputeScore:
-    @staticmethod
-    def init(word_scores: Dict[str, float]) -> None:
-        import inspect
-        local_vars = inspect.stack()[1].frame.f_locals  # init -> worker
-        # print(local_vars.keys())
-        local_vars['word_scores'] = word_scores
+class EncodeSPMState(flutes.PoolState):
+    def __init__(self, path: Path) -> None:
+        self.sp = spm.SentencePieceProcessor()
+        self.sp.Load(path)
 
-    @staticmethod
-    def compute_score(code: str) -> float:
-        import inspect
-        local_vars = inspect.stack()[2].frame.f_locals  # compute_score -> mapper -> worker
-        # print(local_vars.keys())
-        word_scores = local_vars['word_scores']
-        score = sum(word_scores.get(w, 0.0) for w in tokenize(code))
-        return score
+    def encode_sentence(self, sent: str) -> str:
+        return TOKEN_SEP.join(subtok for token in sent.split(TOKEN_SEP)
+                              for subtok in self.sp.EncodeAsPieces(token))
 
-
-class EncodeSPM:
-    @staticmethod
-    def init(path: str) -> None:
-        import inspect
-        local_vals = inspect.stack()[1].frame.f_locals  # init -> worker
-        sp = spm.SentencePieceProcessor()
-        sp.Load(path)
-        local_vals['sp'] = sp
-
-    @staticmethod
-    def encode_sentence(sp: spm.SentencePieceProcessor, sent: str) -> str:
-        return TOKEN_SEP.join(subtok for token in sent.split(TOKEN_SEP) for subtok in sp.EncodeAsPieces(token))
-
-    @staticmethod
-    def encode_spm(example: Tuple[str, str]) -> Tuple[str, str]:
-        import inspect
-        local_vals = inspect.stack()[2].frame.f_locals  # init -> worker
-        sp: spm.SentencePieceProcessor = local_vals['sp']
-        return (EncodeSPM.encode_sentence(sp, example[0]),
-                EncodeSPM.encode_sentence(sp, example[1]))
+    def encode_spm(self, example: Tuple[str, str]) -> Tuple[str, str]:
+        return (self.encode_sentence(example[0]),
+                self.encode_sentence(example[1]))
 
 
 def sample_sets(sets: List[Tuple[str, int]], max_size: int) -> List[str]:
@@ -154,18 +132,19 @@ def main():
     @flutes.cache(output_dir / "scores.pkl", name="competency scores")
     def compute_scores():
         # Gather word counts and compute "competency" scores for each example, for use in curriculum learning.
-        word_counter = Counter()
-        data_chunks = flutes.chunk(map(lambda xs: xs[0], data), args.block_size)  # use only the source sentence
-        with flutes.safe_pool(args.n_procs) as pool:
-            for counter in pool.imap_unordered(count_words, data_chunks):
-                word_counter.update(counter)
+        with flutes.safe_pool(args.n_procs, state_class=CountWordsState) as pool:
+            for _ in pool.imap_unordered(
+                    CountWordsState.count_words,  # use only the source sentence
+                    map(lambda ex: ex.decompiled_code, tqdm(data, desc="Counting words")), chunksize=args.block_size):
+                pass
+            word_counter = Counter()
+            for state in pool.get_states():
+                word_counter.update(state.counter)
         total_words = sum(word_counter.values())
         word_scores = {w: -math.log(c / total_words) for w, c in word_counter.items()}
-        with flutes.safe_pool(args.n_procs, initializer=ComputeScore.init, initargs=(word_scores,)) as pool:
-            # scores = list(pool.imap(functools.partial(compute_score, word_scores),
-            #                         tqdm(data, desc="Computing scores"), chunksize=args.block_size))
+        with flutes.safe_pool(args.n_procs, state_class=ComputeScoreState, init_args=(word_scores,)) as pool:
             scores = list(pool.imap(
-                ComputeScore.compute_score,
+                ComputeScoreState.compute_score,
                 map(lambda ex: ex.decompiled_code, tqdm(data, desc="Computing scores")), chunksize=args.block_size))
         return scores
 
@@ -230,10 +209,9 @@ def main():
     spm.SentencePieceTrainer.Train(" ".join(f"--{name}={str(value)}" for name, value in spm_train_args.items()))
 
     # Encode all sentences with the trained SP model.
-    with flutes.safe_pool(args.n_procs, initializer=EncodeSPM.init,
-                          initargs=(str(output_dir / "vocab.model"),)) as pool:
+    with flutes.safe_pool(args.n_procs, state_class=EncodeSPMState, init_args=(output_dir / "vocab.model",)) as pool:
         processed_code = list(pool.imap(
-            EncodeSPM.encode_spm,
+            EncodeSPMState.encode_spm,
             map(lambda ex: (ex.decompiled_code, ex.original_code),
                 tqdm(data, desc="Computing scores")), chunksize=args.block_size))
 

@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+import flutes
 import numpy as np
 import texar.torch as tx
 from argtyped import *
@@ -19,7 +20,7 @@ class Args(Arguments):
 
 
 def read_lines(path: str) -> List[str]:
-    with open(path) as f:
+    with flutes.progress_open(path) as f:
         lines = []
         for line in f:
             line = line.strip()
