@@ -5,14 +5,13 @@ __all__ = [
 ]
 
 # Monkey-patch `RandomSampler` for our use case specifically.
+
 from texar.torch.data.data.sampler import RandomSampler
 
 RandomSampler._iterator_unknown_size = lambda self: self._iterator_given_size(None)
 
 # Make `Executor` a singleton class so we can have a globally available `write_log` method.
 from texar.torch.run.executor import Executor
-from texar.torch.run.condition import Event
-import texar.torch.run.executor_utils as executor_utils
 
 if not hasattr(Executor, "__instance__"):
     Executor.__instance__ = None
@@ -27,19 +26,7 @@ if not hasattr(Executor, "__instance__"):
         Executor__init(self, *args, **kwargs)
 
 
-    def _validate_loop(self, iterator) -> None:
-        for batch in iterator:
-            self._fire_event(Event.ValidationIteration, False)
-            return_dict = self._validate_step(batch)
-
-            self._valid_tracker.add(len(batch))
-            executor_utils.update_metrics(return_dict, batch, self.valid_metrics)
-
-            self._fire_event(Event.ValidationIteration, True)
-
-
     Executor.__init__ = __init__
-    Executor._validate_loop = _validate_loop
 
 
 def write_log(log_str: str, *, mode: str = "info",

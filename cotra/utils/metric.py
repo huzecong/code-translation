@@ -67,10 +67,22 @@ class DecodeMixin:
         sentence = ' '.join(words)
         return sentence
 
+    def __getstate__(self):
+        # Save anything but the vocabulary.
+        state = self.__dict__.copy()
+        state["vocab"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__ = state
+
+    def __getnewargs__(self):
+        return (None,)
+
 
 class FileBLEU(metric.SimpleMetric[List[int], float], DecodeMixin):
     def __init__(self, vocab: Vocab, file_path: Optional[Union[str, Path]] = None, encoding: Optional[str] = None):
-        super().__init__(pred_name="preds", label_name="target_output")
+        super().__init__(pred_name="preds", label_name="target_output", higher_is_better=True)
         self.vocab = vocab
         self.file_path = file_path
         self.perform_decode = True
