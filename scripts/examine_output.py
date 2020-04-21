@@ -28,10 +28,11 @@ def read_lines(path: str) -> List[str]:
     return lines
 
 
-def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
+def read_pairs(path: str, decode: bool = False,
+               tuple_separator: str = "\1", token_separator: str = "\0") -> Tuple[List[str], List[str]]:
     def _filter_fn(src: str, tgt: str) -> bool:
-        src_len = src.count(" ") + 1  # count spaces instead of actually performing splitting
-        tgt_len = tgt.count(" ") + 1
+        src_len = src.count(token_separator) + 1  # count spaces instead of actually performing splitting
+        tgt_len = tgt.count(token_separator) + 1
         lower, upper = 0.5, 3.0
         return (src_len + 1 <= 512 and  # account for EOS
                 tgt_len + 1 <= 512 and
@@ -40,8 +41,8 @@ def read_pairs(path: str, decode: bool = False) -> Tuple[List[str], List[str]]:
     lines = read_lines(path)
     src_data, tgt_data = [], []
     for line in lines:
-        example = line.split(cotra.data.CodeDataSource.DELIMITER)
-        src, tgt, _ = example
+        example = line.split(tuple_separator)
+        src, tgt, *_ = example
         if not _filter_fn(src, tgt):
             continue
         if decode:

@@ -1,11 +1,19 @@
 random_seed: 1234
 
 data:
-  filename_pattern: "data/processed/{split}.txt"
-  vocab_file: "data/vocab.vocab"
+  training_set: "data/processed/train.txt"
+  valid_sets:
+    repos_included: "data/processed/valid.txt"
+    repos_excluded: "data/processed/valid_exclude.txt"
+  test_sets:
+    repos_included: "data/processed/test.txt"
+    repos_excluded: "data/processed/test_exclude.txt"
+  vocab_file: "data/processed/vocab.vocab"
   encoding: "spm"
   verbose: true
   hparams:
+    tuple_delimiter: "\u0001"
+    token_delimiter: "\u0000"
     max_src_len: 512
     max_tgt_len: 512
 
@@ -23,9 +31,9 @@ training:
   max_batch_tokens: 4096
   test_batch_size: 16
 
-  max_train_steps: 100000
+  max_train_steps: 1000000
   display_steps: 500
-  eval_steps: 5000
+  eval_steps: 10000
 
 inference:
   beam_width: 5

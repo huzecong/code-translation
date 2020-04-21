@@ -19,6 +19,14 @@ T = TypeVar('T')
 RawExample = Tuple[str, str, float]
 
 
+class InputData(NamedTuple):
+    decompiled_code: str
+    original_code: str
+    score: float
+    repo: str  # "owner/name"
+    sha: str
+
+
 class Example(NamedTuple):
     src: str
     tgt: str
@@ -28,24 +36,26 @@ class Example(NamedTuple):
 
 
 class CodeDataSource(tx.data.DataSource[RawExample]):
-    DELIMITER = " ▁|SEP|▁ "
-
-    def __init__(self, path: str, verbose: bool = False):
+    def __init__(self, path: str, tuple_delimiter: str, verbose: bool = False, max_dataset_size: int = -1):
         self.path = path
         self.verbose = verbose
+        self.delimiter = tuple_delimiter
+        self.max_dataset_size = max_dataset_size
 
     def __iter__(self):
-        with flutes.FileProgress(open(self.path, "r"), verbose=self.verbose, desc=f"Reading {self.path}") as f:
+        with flutes.progress_open(self.path, "r", verbose=self.verbose, desc=f"Reading {self.path}") as f:
+            count = 0
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                splits = line.split(self.DELIMITER)
-                assert len(splits) == 3
-                src = splits[0].strip()
-                tgt = splits[1].strip()
-                score = float(splits[2])
+                splits = line.split(self.delimiter)
+                assert len(splits) == 5
+                src, tgt, score, repo, sha = splits
                 yield src, tgt, score
+                count += 1
+                if 0 < self.max_dataset_size <= count:
+                    break
 
 
 class CodeData(tx.data.DatasetBase[RawExample, Example]):
@@ -57,9 +67,11 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             "cache_strategy": "processed",
         }
         self._hparams = tx.HParams(hparams, self.default_hparams())
+        self.delimiter = self._hparams.token_delimiter
         self.vocab = vocab
 
-        file_source = CodeDataSource(path, verbose=self._hparams.verbose)
+        file_source = CodeDataSource(path, self._hparams.tuple_delimiter,
+                                     verbose=self._hparams.verbose, max_dataset_size=self._hparams.max_dataset_size)
         file_source = tx.data.FilterDataSource(file_source, self._filter_fn)
         if self._hparams.curriculum.enabled:
             data = sorted(file_source, key=lambda ex: ex[2])  # sort by increasing difficulty score
@@ -96,6 +108,8 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             },
             "shuffle_buffer_size": 4096,
             "verbose": False,
+            "tuple_delimiter": " ▁|SEP|▁ ",
+            "token_delimiter": " ",
         }
 
     def update_steps(self, steps: int):
@@ -120,8 +134,8 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
 
     def _filter_fn(self, example: RawExample) -> bool:
         src, tgt, _ = example
-        src_len = src.count(" ") + 1  # count spaces instead of actually performing splitting
-        tgt_len = tgt.count(" ") + 1
+        src_len = src.count(self.delimiter) + 1  # count spaces instead of actually performing splitting
+        tgt_len = tgt.count(self.delimiter) + 1
         lower, upper = self._hparams.valid_src_tgt_length_ratio
         return (src_len + 1 <= self._hparams.max_src_len and  # account for EOS
                 tgt_len + 1 <= self._hparams.max_tgt_len and
@@ -130,9 +144,9 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
     def process(self, raw_example: RawExample) -> Example:
         # Convert to IDs and add EOS tokens.
         src, tgt, score = raw_example
-        src_seq = self.vocab.map_to_ids(src.split())
+        src_seq = self.vocab.map_to_ids(src.split(self.delimiter))
         src_seq.append(self.vocab.eos_id)
-        tgt_seq = self.vocab.map_to_ids(tgt.split())
+        tgt_seq = self.vocab.map_to_ids(tgt.split(self.delimiter))
         tgt_seq.append(self.vocab.eos_id)
         assert len(src_seq) <= self._hparams.max_src_len and len(tgt_seq) <= self._hparams.max_tgt_len
         return Example(src=src, tgt=tgt, score=score,

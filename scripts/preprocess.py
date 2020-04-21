@@ -217,7 +217,7 @@ def main():
         pickle.dump(splits, f)
 
     # Write out training text and train SentencePiece model.
-    train_text_path = output_dir / "train.txt"
+    train_text_path = output_dir / "train_text.txt"
     with train_text_path.open("w") as f:
         for idx in tqdm(train_split, desc="Writing training text"):
             f.write(data[idx].decompiled_code.replace(TOKEN_SEP, " ") + "\n")

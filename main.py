@@ -20,6 +20,7 @@ class Args(Arguments):
     run_mode: Choices["train", "valid", "test"] = "train"
     output_dir: str = "outputs/"
     load_checkpoint: Switch = False
+    checkpoint_path: Optional[str] = None
     pdb: Switch = False
     n_procs: int = 0
     curriculum: Switch = True
@@ -58,31 +59,36 @@ def main() -> None:
 
     with open(args.config_file) as f:
         config: Dict[str, Any] = yaml.safe_load(f)
+    # Do some validation before running time-consuming processes.
+    assert os.path.exists(config["data"]["training_set"])
+    assert all(os.path.exists(path) for path in config["data"]["valid_sets"].values())
+    assert all(os.path.exists(path) for path in config["data"]["test_sets"].values())
 
     tx.run.make_deterministic(config["random_seed"])
     print(f"Random seed set to {config['random_seed']}")
 
     # Load data
     vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
-    datasets: Dict[str, cotra.CodeData] = {
-        split: cotra.CodeData(
-            path=os.path.join(config["data"]["filename_pattern"].format(split=split)),
-            vocab=vocab,
-            hparams={
-                **config["data"].get("hparams", {}),
-                **(
-                    # hparams for training set.
-                    {"shuffle": True, "curriculum": {"enabled": args.curriculum},
-                     "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs}
-                    if split == "train" else
-                    # hparams for valid/test set.
-                    {"shuffle": False, "curriculum": {"enabled": False},
-                     "batch_size": config["training"]["test_batch_size"],
-                     "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1}
-                )
-            }
-        ) for split in (["train", "valid", "test"] if args.run_mode == "train" else [args.run_mode])
+    datasets: Dict[str, flutes.MaybeDict[cotra.CodeData]] = {}
+    if args.run_mode == "train":
+        datasets["train"] = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
+            "shuffle": True, "curriculum": {"enabled": args.curriculum},
+            "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs,
+            **config["data"]["hparams"],
+        })
+    eval_splits: Dict[str, flutes.MaybeDict[str]] = {
+        "valid": config["data"]["valid_sets"],
+        "test": config["data"]["test_sets"],
     }
+    for split, paths in eval_splits.items():
+        datasets[split] = {
+            f"{split}_{name}": cotra.CodeData(path=path, vocab=vocab, hparams={
+                "shuffle": False, "curriculum": {"enabled": False},
+                "batch_size": config["training"]["test_batch_size"],
+                "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1,
+                **config["data"]["hparams"],
+            }) for name, path in paths.items()
+        }
     batching_strategy = cotra.PairedTextTokenCountBatchingStrategy(config["training"]["max_batch_tokens"])
 
     # Create model and optimizer
@@ -99,11 +105,12 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     encoding = config["data"].get("encoding", None)
     training_config = config["training"]
+    test_output_path = output_dir / "test.output"
     executor = Executor(
         model=model,
         train_data=datasets.get("train", None),
-        valid_data=datasets.get("valid", None),
-        test_data=datasets.get("test", None),
+        valid_data=datasets["valid"]["valid_repos_included"],
+        test_data=datasets["test"],
         batching_strategy=batching_strategy,
         optimizer=optim,
         lr_scheduler=scheduler,
@@ -117,10 +124,10 @@ def main() -> None:
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
         valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
                                                 sample_output_per=len(datasets["valid"]) // 10),
-        test_metrics=[cotra.utils.FileBLEU(vocab, output_dir / "test.output", encoding=encoding),
+        test_metrics=[cotra.utils.FileBLEU(vocab, test_output_path, encoding=encoding),
                       ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",
-        test_progress_log_format=("{time} : Evaluating on test ({progress}%, {speed}), "
+        test_progress_log_format=("{time} : Evaluating on {split} ({progress}%, {speed}), "
                                   "unofficial BLEU = {unofficial_bleu:.2f}"),
         validate_mode='predict',
         checkpoint_dir=(args.output_dir if not args.debug else None),
@@ -139,18 +146,24 @@ def main() -> None:
             exc._train_tracker.set_size(len(training_set))
             exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {training_set.competency * 100:6.2f}%")
 
+    @executor.on(cond.validation(better=True))
+    def test_on_excluded_validation_set(exc: Executor):
+        exc.test({"valid_repos_excluded": datasets["valid"]["valid_repos_excluded"]})
+
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":
         if args.load_checkpoint:
-            load_path = executor.load(allow_failure=True)
+            load_path = executor.load(path=args.checkpoint_path, allow_failure=True)
             if load_path is not None:
-                executor.test({"valid": datasets["valid"]})
+                executor.test(datasets["valid"])
 
         executor.train()
     else:
-        executor.load(load_training_state=False)
-        split = "test" if args.run_mode == "test" else "valid"
-        executor.test({split: datasets[split]})
+        executor.load(path=args.checkpoint_path, load_training_state=False)
+        for name, dataset in datasets[args.run_mode].items():
+            executor.test({name: dataset})
+            # Manually rename the test output file.
+            os.rename(str(test_output_path) + ".hyp", str(test_output_path) + f".hyp.{name}")
 
 
 if __name__ == "__main__":
