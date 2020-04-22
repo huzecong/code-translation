@@ -1,3 +1,5 @@
+from typing import List
+
 from argtyped import Arguments
 from bashplotlib.histogram import plot_hist
 from tqdm import tqdm
@@ -5,20 +7,27 @@ from tqdm import tqdm
 import cotra
 
 import sys
+
 sys.path.append(".")
 from examine_output import read_pairs
 
 
 class Args(Arguments):
-    data_pattern: str = "data/processed/{split}.txt"
+    train_file: str = "data/processed/train.txt"
+    test_file: str = "data/processed/test.txt"
     output_file: str = "data/processed/overlap_test.txt"
+
+
+def tokenize(s: str) -> List[str]:
+    TOKEN_SEPARATOR = "\0"
+    return s.split(TOKEN_SEPARATOR)
 
 
 def main():
     args = Args()
     datasets = {
-        split: read_pairs(args.data_pattern.format(split=split), decode=False)
-        for split in ["train", "test"]
+        "train": read_pairs(args.train_file, decode=False),
+        "test": read_pairs(args.test_file, decode=False),
     }
 
     merged_dataset = sorted([(tgt, idx if key == "test" else -1)
@@ -34,12 +43,12 @@ def main():
         candidates = []
         left = next((i for i in range(idx - 1, -1, -1) if merged_dataset[i][1] == -1), None)
         right = next((i for i in range(idx + 1, len(merged_dataset)) if merged_dataset[i][1] == -1), None)
-        if left: candidates.append(merged_dataset[left][0].split())
-        if right: candidates.append(merged_dataset[right][0].split())
+        if left: candidates.append(tokenize(merged_dataset[left][0]))
+        if right: candidates.append(tokenize(merged_dataset[right][0]))
         if len(candidates) == 0:
             breakpoint()
             continue
-        test_sent = test_sent.split()
+        test_sent = tokenize(test_sent)
         max_overlap, cand_sent = max((cotra.utils.lcs(test_sent, cand) / max(len(test_sent), len(cand)), cand)
                                      for cand in candidates)
         if max_overlap > 0.8:
@@ -51,7 +60,7 @@ def main():
         overlap_scores[key] = max_overlap
     print(cnt)
     print(overlap_ids)
-    if len(overlap_scores) != len(datasets["test"]):
+    if len(overlap_scores) != len(datasets["test"][0]):
         breakpoint()
     overlap_scores = [overlap_scores[idx] for idx in range(len(overlap_scores))]
     plot_hist(overlap_scores, height=10, pch="x", xlab=True, showSummary=True, bincount=70)

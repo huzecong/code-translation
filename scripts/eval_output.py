@@ -1,8 +1,9 @@
 import itertools
+import os
 import pickle
 import re
 import subprocess
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from typing import Callable, Dict, Generic, Iterable, Iterator, List, NamedTuple, Optional, Tuple, TypeVar
 
 import numpy as np
@@ -10,11 +11,12 @@ import texar.torch as tx
 from argtyped import Arguments
 from mypy_extensions import TypedDict
 from termcolor import colored
-from tqdm import tqdm
+from tqdm import trange
 
 
 class Args(Arguments):
     test_file: str = "test_output.pkl"
+    output_dir: str = "."
 
 
 class Frac:
@@ -206,24 +208,29 @@ class Markdown:
         return "\n".join("| " + line + " |" for line in lines)
 
 
-class Evaluator:
-    def __init__(self, export: Optional[str] = None):
-        self.stat_unparsable = Frac()  # code that is unparsable
-        self.stat_fn_name = Frac()  # correct function name
-        self.stat_fn_ret_type = Frac()  # correct function return type
-        self.stat_fn_ret_type_strict = Frac()  # correct function return type
-        self.stat_arg_name = Frac()  # correct argument names (w.r.t arguments in target)
-        self.stat_arg_type = Frac()  # correct argument types (ignoring cv-qualifiers)
-        self.stat_arg_type_strict = Frac()  # correct argument types
-        self.stat_arg_missing = Frac()  # missing arguments
-        self.stat_redundant_args = 0  # extra/duplicate arguments
-        self.stat_pointer = ConfusionMat()  # correct type changes from non-pointer to pointer
+class Stats:
+    def __init__(self):
+        self.unparsable = Frac()  # code that is unparsable
+        self.fn_name = Frac()  # correct function name
+        self.fn_ret_type = Frac()  # correct function return type
+        self.fn_ret_type_strict = Frac()  # correct function return type
+        self.arg_name = Frac()  # correct argument names (w.r.t arguments in target)
+        self.arg_type = Frac()  # correct argument types (ignoring cv-qualifiers)
+        self.arg_type_strict = Frac()  # correct argument types
+        self.arg_missing = Frac()  # missing arguments
+        self.redundant_args = 0  # extra/duplicate arguments
+        self.pointer = ConfusionMat()  # correct type changes from non-pointer to pointer
 
-        self.stat_improving = CategoryCounter()  # examples that improved compared to
-        self.stat_arg_name_kind = CategoryCounter()
-        self.stat_arg_type_kind = CategoryCounter()
-
+        self.improving = CategoryCounter()  # examples that improved compared to
+        self.arg_name_kind = CategoryCounter()
+        self.arg_type_kind = CategoryCounter()
         self.deteriorated_examples = defaultdict(list)
+
+
+class Evaluator:
+    def __init__(self, names: List[str], export: Optional[str] = None):
+        self.stats = OrderedDict((name, Stats()) for name in names)
+        self.names = names
 
         self.export_path = export
         if export is not None:
@@ -393,7 +400,8 @@ class Evaluator:
         arg_types_strict: Dict[str, bool]  # (name) -> is_correct
         pointer_conversion: Dict[str, Tuple[bool, bool]]  # (name) -> (should_convert, did_convert)
 
-    def _evaluate_signatures(self, src: FuncSignature, tgt: FuncSignature, hyp: FuncSignature):
+    def _evaluate_signatures(self, src: FuncSignature, tgt: FuncSignature, hyp: FuncSignature,
+                             stats: Optional[Stats] = None):
         correct_func_name = tgt.name == hyp.name
         correct_ret_type = self._compare_type(tgt.ret_type, hyp.ret_type)
         correct_ret_type_strict = self._compare_type(tgt.ret_type, hyp.ret_type, cv_qualifiers=True)
@@ -405,7 +413,8 @@ class Evaluator:
         for tgt_arg_type, arg_name in tgt.args:
             src_arg_typ = next((typ for typ, name in src.args if name == arg_name), None)
             idx = next((idx for idx, (_, name) in enumerate(hyp_args) if name == arg_name), None)
-            self.stat_arg_name_kind.add([(idx is not None,
+            if stats is not None:
+                stats.arg_name_kind.add([(idx is not None,
                                           "in_src" if src_arg_typ is not None else "not_in_src")])
             missing[arg_name] = (idx is None)
             if idx is not None:
@@ -415,7 +424,8 @@ class Evaluator:
                 if src_arg_typ is not None:
                     pointer_check_types[arg_name] = (src_arg_typ, tgt_arg_type, hyp_arg_typ)
                 del hyp_args[idx]
-            self.stat_arg_type_kind.add([(correct_arg_types.get(arg_name, False),
+            if stats is not None:
+                stats.arg_type_kind.add([(correct_arg_types.get(arg_name, False),
                                           "in_src" if src_arg_typ is not None else "not_in_src")])
         correct_pointer_conversion: Dict[str, Tuple[bool, bool]] = {}
         for arg_name, (src_typ, tgt_typ, hyp_typ) in pointer_check_types.items():
@@ -568,125 +578,148 @@ class Evaluator:
             Markdown.list(parse_result),
         ]
 
+    class HypOutput(NamedTuple):
+        tokens: List[str]
+        func_sig: FuncSignature
+        is_correct: 'EvalOutput'
+        scores_diff: Dict[str, int]
+
     @classmethod
     def _generate_markdown_section(
             cls, idx: int,
             src_tokens: List[str], src_func_sig: FuncSignature,
             tgt_tokens: List[str], tgt_func_sig: FuncSignature,
-            hyp_tokens: List[str], hyp_func_sig: FuncSignature,
-            is_correct_hyp: 'EvalOutput', overlap_score: float, scores_diff: Dict[str, int]) -> str:
+            hyp_output: Dict[str, HypOutput],
+            overlap_score: float) -> str:
 
-        bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp_tokens, max_order=4, smooth=True)
-        bleu8 = tx.evals.sentence_bleu([tgt_tokens], hyp_tokens, max_order=8, smooth=True)
-        improvements = [key for key, diff in scores_diff.items() if diff > 0]
-        deteriorates = [key for key, diff in scores_diff.items() if diff < 0]
-        additional_evals = [
-            f"BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}",
-            f"Similarity Score: " + (f'<div class="highlight">{overlap_score:.3f}</div>'
-                                  if overlap_score >= 0.8 else f"{overlap_score:.3f}"),
-            Markdown.underline("Improvements w.r.t Decompiled Code:") + " " +
-            ("; ".join(cls.KEY_DESCRIPTION[key] for key in improvements) if len(improvements) > 0 else "(None)"),
-            Markdown.underline("Deteriorations w.r.t Decompiled Code:") + " " +
-            ("; ".join(cls.KEY_DESCRIPTION[key] for key in deteriorates) if len(deteriorates) > 0 else "(None)"),
+        outputs: List[List[str]] = [
+            cls._generate_code_section("Decompiled (source)", src_tokens, src_func_sig),
+            cls._generate_code_section("Original (target)", tgt_tokens, tgt_func_sig),
         ]
+        for name, hyp in hyp_output.items():
+            bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=4, smooth=True)
+            bleu8 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=8, smooth=True)
+            improvements = [key for key, diff in hyp.scores_diff.items() if diff > 0]
+            deteriorates = [key for key, diff in hyp.scores_diff.items() if diff < 0]
+            additional_evals = [
+                f"BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}",
+                f"Similarity Score: " + (f'<div class="highlight">{overlap_score:.3f}</div>'
+                                         if overlap_score >= 0.8 else f"{overlap_score:.3f}"),
+                Markdown.underline("Improvements w.r.t Decompiled Code:") + " " +
+                ("; ".join(cls.KEY_DESCRIPTION[key] for key in improvements) if len(improvements) > 0 else "(None)"),
+                Markdown.underline("Deteriorations w.r.t Decompiled Code:") + " " +
+                ("; ".join(cls.KEY_DESCRIPTION[key] for key in deteriorates) if len(deteriorates) > 0 else "(None)"),
+            ]
+            outputs.append(cls._generate_code_and_metrics(
+                "Prediction", hyp.tokens, hyp.func_sig, hyp.is_correct, additional_evals))
 
         section = Markdown.collapse_section(
             f"Example {idx}:", f"example-{idx}",
-            cls._generate_code_section("Decompiled (source)", src_tokens, src_func_sig) +
-            cls._generate_code_section("Original (target)", tgt_tokens, tgt_func_sig) +
-            cls._generate_code_and_metrics(
-                "Prediction", hyp_tokens, hyp_func_sig, is_correct_hyp, additional_evals))
+            list(itertools.chain.from_iterable(outputs)))
         return "\n\n".join(section)
 
-    def add(self, src: str, tgt: str, hyp: str, overlap_score: float) -> None:
-        src_tokens = self._split_code(src)
-        tgt_tokens = self._split_code(tgt)
-        hyp_tokens = self._split_code(hyp, syntax_correct=False)
-        src_func_sig = self._parse_func(src_tokens)
-        tgt_func_sig = self._parse_func(tgt_tokens)
+    def _parse_raw_code(self, code: str, syntax_correct: bool = True) -> Tuple[List[str], FuncSignature, bool]:
+        tokens = self._split_code(code, syntax_correct=syntax_correct)
         parsable = True
         try:
-            hyp_func_sig = self._parse_func(hyp_tokens, syntax_correct=False)
+            func_sig = self._parse_func(tokens, syntax_correct=syntax_correct)
         except:
-            # print(colored("Malformed output:", "red"), hyp)
             parsable = False
-            self.deteriorated_examples["unparsable"].append(self.index)
-            hyp_func_sig = FuncSignature(TypeSignature(["<parse failed>"], False), "<parse failed>", [])
+            func_sig = FuncSignature(TypeSignature(["<parse failed>"], False), "<parse failed>", [])
+        return tokens, func_sig, parsable
 
-        # assert src_func_sig.name == tgt_func_sig.name
-        # if src_func_sig.name != tgt_func_sig.name:
-        # print(colored(src_func_sig, "green"))
-        # print(self._split_code(src))
-        # print(colored(tgt_func_sig, "green"))
-        # print(self._split_code(tgt))
-        # print(colored(hyp_func_sig, "green"))
-        # print(self._split_code(hyp))
-        # breakpoint()
-        # return
+    def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_score: float) -> None:
+        src_tokens, src_func_sig, _ = self._parse_raw_code(src)
+        tgt_tokens, tgt_func_sig, _ = self._parse_raw_code(tgt)
 
-        #         print(" ".join(src_func_sig.ret_type.type))
-        # if "( * (" in " ".join(src_func_sig.ret_type.type):
-        #     print(self._split_code(src))
-
-        is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig)
         is_correct_src = self._evaluate_signatures(src_func_sig, tgt_func_sig, src_func_sig)
-
-        scores_hyp = self._get_score(is_correct_hyp)
         scores_src = self._get_score(is_correct_src)
-        scores_diff = {key: sign(scores_hyp[key] - scores_src[key]) for key in scores_hyp.keys()}
-        for key, diff in scores_diff.items():
-            self.stat_improving.add([(key, diff)])
-            if diff == -1:
-                self.deteriorated_examples[key].append(self.index)
 
-        self.stat_unparsable.add([not parsable])
-        self.stat_fn_name.add([is_correct_hyp.func_name])
-        self.stat_fn_ret_type.add([is_correct_hyp.ret_type])
-        self.stat_fn_ret_type_strict.add([is_correct_hyp.ret_type_strict])
-        self.stat_arg_missing.add(is_correct_hyp.missing_args.values())
-        self.stat_arg_name.add(not v for v in is_correct_hyp.missing_args.values())
-        self.stat_arg_type.add(is_correct_hyp.arg_types.values())
-        self.stat_arg_type_strict.add(is_correct_hyp.arg_types_strict.values())
-        self.stat_redundant_args += len(is_correct_hyp.redundant_args)
-        for g, p in is_correct_hyp.pointer_conversion.values():
-            self.stat_pointer.add(gold=[g], pred=[p])
+        hyp_outputs = OrderedDict()
+        for name in self.names:
+            hyp = hyps[name]
+            stats = self.stats[name]
+            hyp_tokens, hyp_func_sig, parsable = self._parse_raw_code(hyp, syntax_correct=False)
+            if not parsable:
+                stats.deteriorated_examples["unparsable"].append(self.index)
+
+            is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig, stats)
+            scores_hyp = self._get_score(is_correct_hyp)
+            scores_diff = {key: sign(scores_hyp[key] - scores_src[key]) for key in scores_hyp.keys()}
+            for key, diff in scores_diff.items():
+                stats.improving.add([(key, diff)])
+                if diff == -1:
+                    stats.deteriorated_examples[key].append(self.index)
+
+            stats.unparsable.add([not parsable])
+            stats.fn_name.add([is_correct_hyp.func_name])
+            stats.fn_ret_type.add([is_correct_hyp.ret_type])
+            stats.fn_ret_type_strict.add([is_correct_hyp.ret_type_strict])
+            stats.arg_missing.add(is_correct_hyp.missing_args.values())
+            stats.arg_name.add(not v for v in is_correct_hyp.missing_args.values())
+            stats.arg_type.add(is_correct_hyp.arg_types.values())
+            stats.arg_type_strict.add(is_correct_hyp.arg_types_strict.values())
+            stats.redundant_args += len(is_correct_hyp.redundant_args)
+            for g, p in is_correct_hyp.pointer_conversion.values():
+                stats.pointer.add(gold=[g], pred=[p])
+
+            hyp_outputs[name] = self.HypOutput(hyp_tokens, hyp_func_sig, is_correct_hyp, scores_diff)
 
         if self.export_path is not None:
             section = self._generate_markdown_section(
-                self.index, src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_tokens, hyp_func_sig,
-                is_correct_hyp, overlap_score, scores_diff)
+                self.index, src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_score)
             self.export_sections.append(section)
             self.index += 1
 
     def print_summary(self) -> None:
-        summary_table = [
-            ["Metric", "Value"],
-            [colored("Unparsable function signature", "red"), str(self.stat_unparsable)],
-            [colored("Correct func names", "green"), str(self.stat_fn_name)],
-            [colored("Correct return types (ignoring CV)", "green"), str(self.stat_fn_ret_type)],
-            [colored("Correct return types (strict)", "green"), str(self.stat_fn_ret_type_strict)],
-            [colored("Correct argument names", "green"), str(self.stat_arg_name)],
-            [colored("Correct argument types (ignoring CV)", "green"), str(self.stat_arg_type)],
-            [colored("Correct argument types (strict)", "green"), str(self.stat_arg_type_strict)],
-            [colored("Missing arguments", "red"), str(self.stat_arg_missing)],
-            [colored("Redundant arguments", "red"), str(self.stat_redundant_args)],
-            [colored("Pointer conversion", "green"),
-             str(f"precision: {self.stat_pointer.precision}, recall: {self.stat_pointer.recall}")],
+        summary_table_col_headers = [
+            "Metric",
+            colored("Unparsable function signature", "red"),
+            colored("Correct func names", "green"),
+            colored("Correct return types (ignoring CV)", "green"),
+            colored("Correct return types (strict)", "green"),
+            colored("Correct argument names", "green"),
+            colored("Correct argument types (ignoring CV)", "green"),
+            colored("Correct argument types (strict)", "green"),
+            colored("Missing arguments", "red"),
+            colored("Redundant arguments", "red"),
+            colored("Pointer conversion", "green"),
         ]
+        summary_table_cols: List[List[str]] = [[
+            name,
+            str(stats.unparsable),
+            str(stats.fn_name),
+            str(stats.fn_ret_type),
+            str(stats.fn_ret_type_strict),
+            str(stats.arg_name),
+            str(stats.arg_type),
+            str(stats.arg_type_strict),
+            str(stats.arg_missing),
+            str(stats.redundant_args),
+            f"precision: {stats.pointer.precision}, recall: {stats.pointer.recall}",
+        ] for name, stats in self.stats.items()]
+        summary_table: List[List[str]] = list(zip(*([summary_table_col_headers] + summary_table_cols)))  # transpose
         summary_table_str = Markdown.table(summary_table, ["left", "right"])
 
-        improving_table = [["Metric", "Deteriorated (↓)", "Same (-)", "Improved (↑)"]]
-        for key, group in self.stat_improving.group_by(lambda xs: xs[0]).items():
-            values = {diff: count for (_, diff), count in group}
-            total = sum(values.values())
-            improving_table.append([self.KEY_DESCRIPTION[key]] +
-                                   [f"{values.get(diff, 0)} / {total}" for diff in [-1, 0, 1]])
-        improving_table_str = Markdown.table(improving_table, ["left", "right", "right", "right"])
+        improvement_tables: Dict[str, str] = OrderedDict()
+        for name in self.names:
+            improving_table = [["Metric", "Deteriorated (↓)", "Same (-)", "Improved (↑)"]]
+            for key, group in self.stats[name].improving.group_by(lambda xs: xs[0]).items():
+                values = {diff: count for (_, diff), count in group}
+                total = sum(values.values())
+                improving_table.append([self.KEY_DESCRIPTION[key]] +
+                                       [f"{values.get(diff, 0)} / {total}" for diff in [-1, 0, 1]])
+            improving_table_str = Markdown.table(improving_table, ["left", "right", "right", "right"])
+            improvement_tables[name] = improving_table_str
 
         print(summary_table_str, end='\n\n')
-        print(colored("Improving:", "yellow"), improving_table_str, sep='\n', end='\n\n')
-        print(colored("Arg name categories:", "yellow"), self.stat_arg_name_kind.to_string(lambda xs: xs[1]), sep='\n')
-        print(colored("Arg type categories:", "yellow"), self.stat_arg_type_kind.to_string(lambda xs: xs[1]), sep='\n')
+        for name, stats in self.stats.items():
+            print(colored(f"{name}:", "blue"))
+            print(colored("  Improving:", "yellow"), improvement_tables[name], sep='\n', end='\n\n')
+            print(colored("  Arg name categories:", "yellow"),
+                  stats.arg_name_kind.to_string(lambda xs: xs[1]), sep='\n')
+            print(colored("  Arg type categories:", "yellow"),
+                  stats.arg_type_kind.to_string(lambda xs: xs[1]), sep='\n')
 
         if self.export_path is not None:
             style = r"""
@@ -744,62 +777,75 @@ class Evaluator:
             for (let i = 0; i < elems.length; ++i)
                 elems[i].onclick = toggle;
             """
-            with open(self.export_path + ".md", "w") as f:
-                sections = [
-                    # Custom style definitions
-                    "<style>\n" + style + "\n</style>",
-                    #
-                    "## Summary",
-                    "**Metric Values:**",
-                    Markdown.strip_colored(summary_table_str),
-                    "**Improvement w.r.t Decompiled Code:**",
-                    improving_table_str,
-                    # Go-to button
-                    r"""**Go to:** 
-                    <input id="goto-id" placeholder="Enter Example ID...">
-                    <button onclick="window.location.hash='example-'+document.getElementById('goto-id').value">
-                      Go!
-                    </button>""",
-                    # List of IDs for deteriorated examples
-                    "## Lists of Deteriorated Examples",
-                    *["\n\n".join(Markdown.collapse_section(
+
+            sections = []
+            # Custom style definitions
+            sections += ["<style>\n" + style + "\n</style>"]
+            #
+            sections += [
+                "## Summary",
+                "### Metric Values",
+                Markdown.strip_colored(summary_table_str),
+                "### Improvement w.r.t Decompiled Code",
+            ]
+            for name, table in improvement_tables.items():
+                sections += [f"#### {name}", table]
+            # Go-to button
+            sections += [
+                r"""**Go to:** 
+                <input id="goto-id" placeholder="Enter Example ID...">
+                <button onclick="window.location.hash='example-'+document.getElementById('goto-id').value">
+                  Go!
+                </button>"""
+            ]
+            # List of IDs for deteriorated examples
+            sections += ["## Lists of Deteriorated Examples"]
+            for name, stats in self.stats.items():
+                example_list = [
+                    "\n\n".join(Markdown.collapse_section(
                         self.KEY_DESCRIPTION[key], f"list-{key}",
                         [", ".join(f'<a href="#example-{ex_id}">{ex_id}</a>' for ex_id in example_ids)])
-                    ) for key, example_ids in self.deteriorated_examples.items()],
-                    # All examples
-                    "## Examples",
-                    *self.export_sections,
-                    # JavaScript for collapsing sections
-                    '<script type="text/javascript">\n' + script + "\n</script>",
-                ]
+                    ) for key, example_ids in stats.deteriorated_examples.items()]
+                sections += example_list
+            # All examples
+            sections += [
+                "## Examples",
+                *self.export_sections,
+            ]
+            # JavaScript for collapsing sections
+            sections += [
+                '<script type="text/javascript">\n' + script + "\n</script>",
+            ]
+            with open(self.export_path + ".md", "w") as f:
                 f.write("\n\n".join(sections))
             subprocess.run(["pandoc", "--from", "gfm",
                             "--to", "html", "--standalone",
                             "--metadata", "title:Code Translation Evaluation",
                             self.export_path + ".md", "--output", self.export_path])
+            print(f"Generated output at {self.export_path}.md.html")
+
+
+class InputData(NamedTuple):
+    names: List[str]
+    src_data: List[str]
+    tgt_data: List[str]
+    hyp_data: Dict[str, List[str]]
+    overlap_scores: List[float]
 
 
 def main():
     args = Args()
     with open(args.test_file, "rb") as f:
-        src_data, tgt_data, hyp_data, overlap_scores = pickle.load(f)
+        data = InputData(*pickle.load(f))
 
-    evaluator = Evaluator(export="eval-small.html")
-    for src, tgt, hyp, score in zip(tqdm(src_data[:100]), tgt_data, hyp_data, overlap_scores):
-        evaluator.add(src, tgt, hyp, score)
-    evaluator.print_summary()
-
-    evaluator = Evaluator(export="eval.html")
-    for src, tgt, hyp, score in zip(tqdm(src_data), tgt_data, hyp_data, overlap_scores):
-        evaluator.add(src, tgt, hyp, score)
-    evaluator.print_summary()
-
-    # print()
-    #
-    # evaluator = Evaluator()
-    # for src, tgt, hyp in zip(src_data, tgt_data, src_data):
-    #     evaluator.add(src, tgt, hyp)
-    # evaluator.print_summary()
+    for file_name, max_size in [("eval-small.html", 100), ("eval.html", len(data.src_data))]:
+        evaluator = Evaluator(data.names, export=os.path.join(args.output_dir, file_name))
+        for idx in trange(max_size):
+            evaluator.add(src=data.src_data[idx],
+                          tgt=data.tgt_data[idx],
+                          hyps={name: data.hyp_data[name][idx] for name in data.names},
+                          overlap_score=data.overlap_scores[idx])
+        evaluator.print_summary()
 
 
 if __name__ == '__main__':

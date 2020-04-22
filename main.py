@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ class Args(Arguments):
     output_dir: str = "outputs/"
     load_checkpoint: Switch = False
     checkpoint_path: Optional[str] = None
+    use_alternate_vocab: Optional[str] = None
     pdb: Switch = False
     n_procs: int = 0
     curriculum: Switch = True
@@ -68,13 +70,18 @@ def main() -> None:
     print(f"Random seed set to {config['random_seed']}")
 
     # Load data
-    vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
     datasets: Dict[str, flutes.MaybeDict[cotra.CodeData]] = {}
+    hparams = copy.deepcopy(config["data"]["hparams"])
+    if args.use_alternate_vocab is not None:
+        hparams["use_alternate_vocab"] = args.use_alternate_vocab
+        vocab = cotra.utils.Vocab.load(args.use_alternate_vocab + ".vocab")
+    else:
+        vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
     if args.run_mode == "train":
         datasets["train"] = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
             "shuffle": True, "curriculum": {"enabled": args.curriculum},
             "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs,
-            **config["data"]["hparams"],
+            **hparams,
         })
     eval_splits: Dict[str, flutes.MaybeDict[str]] = {
         "valid": config["data"]["valid_sets"],
@@ -86,7 +93,7 @@ def main() -> None:
                 "shuffle": False, "curriculum": {"enabled": False},
                 "batch_size": config["training"]["test_batch_size"],
                 "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1,
-                **config["data"]["hparams"],
+                **hparams,
             }) for name, path in paths.items()
         }
     batching_strategy = cotra.PairedTextTokenCountBatchingStrategy(config["training"]["max_batch_tokens"])

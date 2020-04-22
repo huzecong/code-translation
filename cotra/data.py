@@ -6,6 +6,7 @@ import numpy as np
 import texar.torch as tx
 import torch
 from bashplotlib.histogram import plot_hist
+import sentencepiece as spm
 
 from . import utils
 
@@ -70,6 +71,11 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         self.delimiter = self._hparams.token_delimiter
         self.vocab = vocab
 
+        self.sp = None
+        if self._hparams.use_alternate_vocab:
+            self.sp = spm.SentencePieceProcessor()
+            self.sp.Load(self._hparams.use_alternate_vocab + ".model")
+
         file_source = CodeDataSource(path, self._hparams.tuple_delimiter,
                                      verbose=self._hparams.verbose, max_dataset_size=self._hparams.max_dataset_size)
         file_source = tx.data.FilterDataSource(file_source, self._filter_fn)
@@ -110,6 +116,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             "verbose": False,
             "tuple_delimiter": " ▁|SEP|▁ ",
             "token_delimiter": " ",
+            "use_alternate_vocab": None,
         }
 
     def update_steps(self, steps: int):
@@ -141,12 +148,24 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
                 tgt_len + 1 <= self._hparams.max_tgt_len and
                 lower <= src_len / tgt_len <= upper)
 
+    def _retokenize(self, tokens: List[str]) -> List[str]:
+        result = []
+        for tok in tokens:
+            result += self.sp.EncodeAsPieces(tok)
+        return result
+
     def process(self, raw_example: RawExample) -> Example:
         # Convert to IDs and add EOS tokens.
         src, tgt, score = raw_example
-        src_seq = self.vocab.map_to_ids(src.split(self.delimiter))
+        src_tokens = src.split(self.delimiter)
+        tgt_tokens = tgt.split(self.delimiter)
+        if self.sp is not None:
+            # Truncate sentences if too long.
+            src_tokens = self._retokenize(src_tokens)[:(self._hparams.max_src_len - 1)]
+            tgt_tokens = self._retokenize(tgt_tokens)[:(self._hparams.max_tgt_len - 1)]
+        src_seq = self.vocab.map_to_ids(src_tokens)
         src_seq.append(self.vocab.eos_id)
-        tgt_seq = self.vocab.map_to_ids(tgt.split(self.delimiter))
+        tgt_seq = self.vocab.map_to_ids(tgt_tokens)
         tgt_seq.append(self.vocab.eos_id)
         assert len(src_seq) <= self._hparams.max_src_len and len(tgt_seq) <= self._hparams.max_tgt_len
         return Example(src=src, tgt=tgt, score=score,

@@ -1,3 +1,4 @@
+import pickle
 from typing import List, Tuple
 
 import flutes
@@ -13,10 +14,11 @@ from cotra.utils.metric import DecodeMixin
 
 class Args(Arguments):
     data_file: str = "data/processed/test.txt"  # original dataset
-    ref_file: str = "outputs_no_curriculum/test.output.ref"  # reference sentences, should be the same as target
-    hyp_file: str = "outputs_no_curriculum/test.output.hyp"  # hypotheses
+    hyp_names: str  # comma separated
+    hyp_files: str = "outputs/test_repos_included.hyp.760k"  # hypotheses, comma separated
     overlap_score_file: str = "data/processed/overlap_test.txt"  # overlap scores for test set
-    output_file: str = "outputs_no_curriculum/test.annotated"
+    output_file: str = "outputs/test.annotated"
+    pickle_file: str = "outputs/test_output.pkl"
 
 
 def read_lines(path: str) -> List[str]:
@@ -47,8 +49,8 @@ def read_pairs(path: str, decode: bool = False,
         if not _filter_fn(src, tgt):
             continue
         if decode:
-            src = " ".join(DecodeMixin.spm_decode(src.split()))
-            tgt = " ".join(DecodeMixin.spm_decode(tgt.split()))
+            src = " ".join(DecodeMixin.spm_decode(src.split(token_separator)))
+            tgt = " ".join(DecodeMixin.spm_decode(tgt.split(token_separator)))
         src_data.append(src)
         tgt_data.append(tgt)
     return src_data, tgt_data
@@ -139,17 +141,28 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
 def main():
     args = Args()
     src_data, tgt_data = read_pairs(args.data_file, decode=True)
-    ref_data = read_lines(args.ref_file)
-    hyp_data = read_lines(args.hyp_file)
+    names = args.hyp_names.split(",")
+    hyp_paths = args.hyp_files.split(",")
+    assert len(names) == len(hyp_paths)
+    hyp_data = {}
+    for name, hyp_path in zip(names, hyp_paths):
+        hyp_data[name] = read_lines(hyp_path)
     overlap_scores = [float(x) for x in read_lines(args.overlap_score_file)]
-    for idx, (tgt, ref) in enumerate(zip(tgt_data, ref_data)):
-        if tgt != ref and "<unk>" not in ref:
-            print(idx)
-            print(tgt)
-            print(ref)
-            assert False
+    # for idx, (tgt, ref) in enumerate(zip(tgt_data, ref_data)):
+    #     if tgt != ref and "<unk>" not in ref:
+    #         print(idx)
+    #         print(tgt)
+    #         print(ref)
+    #         assert False
     # assert tgt_data == ref_data
-    assert len(src_data) == len(tgt_data) == len(ref_data) == len(hyp_data) == len(overlap_scores)
+    assert len(src_data) == len(tgt_data) == len(overlap_scores)
+    assert all(len(data) == len(src_data) for data in hyp_data.values())
+
+    with open(args.pickle_file, "wb") as f:
+        obj = (names, src_data, tgt_data, hyp_data, overlap_scores)
+        pickle.dump(obj, f)
+
+    return
 
     bleu_scores = []
     edit_scores = []
