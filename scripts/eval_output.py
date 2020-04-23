@@ -2,10 +2,12 @@ import itertools
 import os
 import pickle
 import re
+import string
 import subprocess
 from collections import Counter, OrderedDict, defaultdict
 from typing import Callable, Dict, Generic, Iterable, Iterator, List, NamedTuple, Optional, Tuple, TypeVar
 
+import flutes
 import numpy as np
 import texar.torch as tx
 from argtyped import Arguments
@@ -156,8 +158,15 @@ class Markdown:
         return f'<div class="{"correct" if val else "wrong"}">{s}</div>'
 
     @classmethod
+    def to_id(cls, s: str) -> str:
+        valid_chars = string.ascii_lowercase + string.digits + "_-"
+        return "".join(filter(lambda x: x in valid_chars, s.lower().replace("_", "-").replace(" ", "-")))
+
+    @classmethod
     def collapse_section(cls, title: str, section_id: str, contents: List[str]) -> List[str]:
-        return ([f'#### <div class="collapse-trigger" collapse="{section_id}" collapsed>{title}</div>',
+        return ([f'<h4 id="{section_id}">'
+                 f'  <div class="collapse-trigger" collapse="{section_id}" collapsed>{title}</div>'
+                 f'</h4>',
                  f'<div class="collapse" collapse="{section_id}" collapsed>'] +
                 contents +
                 ["</div>", "<hr />"])
@@ -207,8 +216,21 @@ class Markdown:
         lines = [rows[0], " | ".join(rules)] + rows[1:]
         return "\n".join("| " + line + " |" for line in lines)
 
+    @classmethod
+    def link(cls, text: str, url: str) -> str:
+        return f"[{text}]({url})"
+
 
 class Stats:
+    KEYS = ["unparsable",
+            "arg_name",
+            "arg_type",
+            "arg_type_strict",
+            "func_name",
+            "pointer_conversion",
+            "ret_type",
+            "ret_type_strict"]
+
     def __init__(self):
         self.unparsable = Frac()  # code that is unparsable
         self.fn_name = Frac()  # correct function name
@@ -224,13 +246,19 @@ class Stats:
         self.improving = CategoryCounter()  # examples that improved compared to
         self.arg_name_kind = CategoryCounter()
         self.arg_type_kind = CategoryCounter()
-        self.deteriorated_examples = defaultdict(list)
+        self.deteriorated_examples = {key: [] for key in self.KEYS}
 
 
 class Evaluator:
+    DECOMPILED_NAME = "Decompiled"
+
     def __init__(self, names: List[str], export: Optional[str] = None):
-        self.stats = OrderedDict((name, Stats()) for name in names)
+        self.stats = OrderedDict((name, Stats()) for name in [self.DECOMPILED_NAME] + names)
         self.names = names
+        self.name_ids = OrderedDict((name, Markdown.to_id(name)) for name in names)
+
+        self.references = []
+        self.hypotheses = {name: [] for name in [self.DECOMPILED_NAME] + names}
 
         self.export_path = export
         if export is not None:
@@ -354,6 +382,8 @@ class Evaluator:
                 arg_boundaries = [arg_rparen_pos] + semicolon_pos
             args = [parse_vardef(l + 1, r - 1) for l, r in zip(arg_boundaries, arg_boundaries[1:])]
 
+        if ret_type == "":
+            ret_type = "void"
         return FuncSignature(ret_type, func_name, args)
 
     @classmethod
@@ -475,6 +505,12 @@ class Evaluator:
             "pointer_conversion": pointer_score,
         })
 
+    C_KEYWORDS = {
+        "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern",
+        "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+    }
+
     @classmethod
     def _prettify(cls, tokens: List[str]) -> str:
         lines = []
@@ -485,6 +521,7 @@ class Evaluator:
             if left in ["(", "!", "~", "[", ".", "->"]: return False
             if right in [")", ";", ",", "[", "]", ".", "->"]: return False
             if left == "*" == right: return False
+            if right == "(" and left.isidentifier() and left not in cls.C_KEYWORDS: return False
             return True
 
         def newline():
@@ -518,7 +555,8 @@ class Evaluator:
         return "\n".join(lines)
 
     @classmethod
-    def _generate_code_section(cls, name: str, code: List[str], sig: FuncSignature) -> List[str]:
+    def _generate_code_section(cls, name: str, code: List[str], sig: FuncSignature,
+                               additional: Optional[List[str]] = None) -> List[str]:
         parse_result = [
             "Function name: " + Markdown.code(sig.name),
             "Return type: " + Markdown.code(" ".join(sig.ret_type.type)),
@@ -526,6 +564,8 @@ class Evaluator:
         if len(sig.args) > 0:
             parse_result.append("Arguments: \n" + Markdown.list([
                 Markdown.code(name) + ": " + Markdown.code(" ".join(typ.type)) for typ, name in sig.args], indent=2))
+        if additional is not None:
+            parse_result += additional
         return [
             Markdown.bold(name),
             Markdown.code_block(cls._prettify(code)),
@@ -559,6 +599,7 @@ class Evaluator:
             else:
                 type_str = Markdown.bool(is_correct.arg_types[arg_name], type_str)
             arg_list.append(name_str + ": " + type_str)
+        arg_list = list(reversed(arg_list))
         missing = [k for k, v in is_correct.missing_args.items() if v]
         if len(missing) > 0:
             arg_list.append(Markdown.underline("Missing:") + " " +
@@ -584,17 +625,20 @@ class Evaluator:
         is_correct: 'EvalOutput'
         scores_diff: Dict[str, int]
 
-    @classmethod
     def _generate_markdown_section(
-            cls, idx: int,
+            self, idx: int,
             src_tokens: List[str], src_func_sig: FuncSignature,
             tgt_tokens: List[str], tgt_func_sig: FuncSignature,
             hyp_output: Dict[str, HypOutput],
             overlap_score: float) -> str:
 
         outputs: List[List[str]] = [
-            cls._generate_code_section("Decompiled (source)", src_tokens, src_func_sig),
-            cls._generate_code_section("Original (target)", tgt_tokens, tgt_func_sig),
+            self._generate_code_section("Decompiled (source)", src_tokens, src_func_sig),
+            self._generate_code_section(
+                "Original (target)", tgt_tokens, tgt_func_sig, additional=[
+                    f"Similarity Score: " + (f'<div class="highlight">{overlap_score:.3f}</div>'
+                                             if overlap_score >= 0.8 else f"{overlap_score:.3f}"),
+                ]),
         ]
         for name, hyp in hyp_output.items():
             bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=4, smooth=True)
@@ -603,15 +647,14 @@ class Evaluator:
             deteriorates = [key for key, diff in hyp.scores_diff.items() if diff < 0]
             additional_evals = [
                 f"BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}",
-                f"Similarity Score: " + (f'<div class="highlight">{overlap_score:.3f}</div>'
-                                         if overlap_score >= 0.8 else f"{overlap_score:.3f}"),
-                Markdown.underline("Improvements w.r.t Decompiled Code:") + " " +
-                ("; ".join(cls.KEY_DESCRIPTION[key] for key in improvements) if len(improvements) > 0 else "(None)"),
-                Markdown.underline("Deteriorations w.r.t Decompiled Code:") + " " +
-                ("; ".join(cls.KEY_DESCRIPTION[key] for key in deteriorates) if len(deteriorates) > 0 else "(None)"),
             ]
-            outputs.append(cls._generate_code_and_metrics(
-                "Prediction", hyp.tokens, hyp.func_sig, hyp.is_correct, additional_evals))
+            for list_name, items in [("Improvements", improvements), ("Deteriorations", deteriorates)]:
+                tag = Markdown.underline(f"{list_name} w.r.t Decompiled Code:")
+                items = [Markdown.link(self.KEY_DESCRIPTION[key], "#" + self._get_list_id(key, name)) for key in items]
+                list_str = "; ".join(items) if len(items) > 0 else "(None)"
+                additional_evals.append(tag + " " + list_str)
+            outputs.append(self._generate_code_and_metrics(
+                f"Prediction ({name})", hyp.tokens, hyp.func_sig, hyp.is_correct, additional_evals))
 
         section = Markdown.collapse_section(
             f"Example {idx}:", f"example-{idx}",
@@ -629,28 +672,35 @@ class Evaluator:
         return tokens, func_sig, parsable
 
     def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_score: float) -> None:
-        src_tokens, src_func_sig, _ = self._parse_raw_code(src)
+        src_tokens, src_func_sig, src_parsable = self._parse_raw_code(src)
         tgt_tokens, tgt_func_sig, _ = self._parse_raw_code(tgt)
+        self.references.append(tgt_tokens)
 
         is_correct_src = self._evaluate_signatures(src_func_sig, tgt_func_sig, src_func_sig)
         scores_src = self._get_score(is_correct_src)
 
         hyp_outputs = OrderedDict()
-        for name in self.names:
-            hyp = hyps[name]
-            stats = self.stats[name]
-            hyp_tokens, hyp_func_sig, parsable = self._parse_raw_code(hyp, syntax_correct=False)
-            if not parsable:
-                stats.deteriorated_examples["unparsable"].append(self.index)
+        for name, stats in self.stats.items():
+            if name != self.DECOMPILED_NAME:
+                hyp = hyps[name]
+                hyp_tokens, hyp_func_sig, parsable = self._parse_raw_code(hyp, syntax_correct=False)
 
-            is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig, stats)
-            scores_hyp = self._get_score(is_correct_hyp)
-            scores_diff = {key: sign(scores_hyp[key] - scores_src[key]) for key in scores_hyp.keys()}
-            for key, diff in scores_diff.items():
-                stats.improving.add([(key, diff)])
-                if diff == -1:
-                    stats.deteriorated_examples[key].append(self.index)
+                if not parsable:
+                    stats.deteriorated_examples["unparsable"].append(self.index)
+                is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig, stats)
+                scores_hyp = self._get_score(is_correct_hyp)
+                scores_diff = {key: sign(scores_hyp[key] - scores_src[key]) for key in scores_hyp.keys()}
+                for key, diff in scores_diff.items():
+                    stats.improving.add([(key, diff)])
+                    if diff == -1:
+                        stats.deteriorated_examples[key].append(self.index)
 
+                hyp_outputs[name] = self.HypOutput(hyp_tokens, hyp_func_sig, is_correct_hyp, scores_diff)
+            else:
+                hyp_tokens, hyp_func_sig, parsable = src_tokens, src_func_sig, src_parsable
+                is_correct_hyp = is_correct_src
+
+            self.hypotheses[name].append(hyp_tokens)
             stats.unparsable.add([not parsable])
             stats.fn_name.add([is_correct_hyp.func_name])
             stats.fn_ret_type.add([is_correct_hyp.ret_type])
@@ -663,17 +713,21 @@ class Evaluator:
             for g, p in is_correct_hyp.pointer_conversion.values():
                 stats.pointer.add(gold=[g], pred=[p])
 
-            hyp_outputs[name] = self.HypOutput(hyp_tokens, hyp_func_sig, is_correct_hyp, scores_diff)
-
         if self.export_path is not None:
             section = self._generate_markdown_section(
                 self.index, src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_score)
             self.export_sections.append(section)
             self.index += 1
 
+    def _get_list_id(self, key: str, name: str) -> str:
+        # key: key of deteriorating list; name: name of dataset
+        return f"list-{key}-{self.name_ids[name]}"
+
     def print_summary(self) -> None:
         summary_table_col_headers = [
             "Metric",
+            colored("BLEU4", "green"),
+            colored("BLEU8", "green"),
             colored("Unparsable function signature", "red"),
             colored("Correct func names", "green"),
             colored("Correct return types (ignoring CV)", "green"),
@@ -687,6 +741,8 @@ class Evaluator:
         ]
         summary_table_cols: List[List[str]] = [[
             name,
+            f"{tx.evals.corpus_bleu([[tgt] for tgt in self.references], self.hypotheses[name], max_order=4):.2f}",
+            f"{tx.evals.corpus_bleu([[tgt] for tgt in self.references], self.hypotheses[name], max_order=8):.2f}",
             str(stats.unparsable),
             str(stats.fn_name),
             str(stats.fn_ret_type),
@@ -696,10 +752,10 @@ class Evaluator:
             str(stats.arg_type_strict),
             str(stats.arg_missing),
             str(stats.redundant_args),
-            f"precision: {stats.pointer.precision}, recall: {stats.pointer.recall}",
+            f"P: {stats.pointer.precision}, R: {stats.pointer.recall}",
         ] for name, stats in self.stats.items()]
         summary_table: List[List[str]] = list(zip(*([summary_table_col_headers] + summary_table_cols)))  # transpose
-        summary_table_str = Markdown.table(summary_table, ["left", "right"])
+        summary_table_str = Markdown.table(summary_table, ["left"] + ["right"] * len(summary_table_cols))
 
         improvement_tables: Dict[str, str] = OrderedDict()
         for name in self.names:
@@ -713,7 +769,8 @@ class Evaluator:
             improvement_tables[name] = improving_table_str
 
         print(summary_table_str, end='\n\n')
-        for name, stats in self.stats.items():
+        for name in self.names:
+            stats = self.stats[name]
             print(colored(f"{name}:", "blue"))
             print(colored("  Improving:", "yellow"), improvement_tables[name], sep='\n', end='\n\n')
             print(colored("  Arg name categories:", "yellow"),
@@ -800,13 +857,15 @@ class Evaluator:
             ]
             # List of IDs for deteriorated examples
             sections += ["## Lists of Deteriorated Examples"]
-            for name, stats in self.stats.items():
+            for name in self.names:
+                stats = self.stats[name]
                 example_list = [
                     "\n\n".join(Markdown.collapse_section(
-                        self.KEY_DESCRIPTION[key], f"list-{key}",
-                        [", ".join(f'<a href="#example-{ex_id}">{ex_id}</a>' for ex_id in example_ids)])
+                        self.KEY_DESCRIPTION[key], self._get_list_id(key, name),
+                        [", ".join(Markdown.link(ex_id, f"#example-{ex_id}") for ex_id in example_ids)
+                         if len(example_ids) > 0 else "(None)"])
                     ) for key, example_ids in stats.deteriorated_examples.items()]
-                sections += example_list
+                sections += [f"### {name}"] + example_list
             # All examples
             sections += [
                 "## Examples",
@@ -822,7 +881,7 @@ class Evaluator:
                             "--to", "html", "--standalone",
                             "--metadata", "title:Code Translation Evaluation",
                             self.export_path + ".md", "--output", self.export_path])
-            print(f"Generated output at {self.export_path}.md.html")
+            print(colored(f"Generated output at {self.export_path}.md.html", "green"))
 
 
 class InputData(NamedTuple):
@@ -835,6 +894,7 @@ class InputData(NamedTuple):
 
 def main():
     args = Args()
+    flutes.register_ipython_excepthook()
     with open(args.test_file, "rb") as f:
         data = InputData(*pickle.load(f))
 

@@ -20,6 +20,7 @@ class Args(Arguments):
     config_file: str = "config/default.yaml"
     run_mode: Choices["train", "valid", "test"] = "train"
     output_dir: str = "outputs/"
+    test_output_file: str = "{split}.hyp.orig"
     load_checkpoint: Switch = False
     checkpoint_path: Optional[str] = None
     use_alternate_vocab: Optional[str] = None
@@ -170,7 +171,7 @@ def main() -> None:
         for name, dataset in datasets[args.run_mode].items():
             executor.test({name: dataset})
             # Manually rename the test output file.
-            os.rename(str(test_output_path) + ".hyp", str(test_output_path) + f".hyp.{name}")
+            os.rename(str(test_output_path) + ".hyp", output_dir / args.test_output_file.format(split=name))
 
 
 if __name__ == "__main__":

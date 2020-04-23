@@ -20,14 +20,17 @@ class Args(Arguments):
 
 def tokenize(s: str) -> List[str]:
     TOKEN_SEPARATOR = "\0"
-    return s.split(TOKEN_SEPARATOR)
+    if TOKEN_SEPARATOR in s:
+        return s.split(TOKEN_SEPARATOR)
+    return s.split()
 
 
 def main():
     args = Args()
     datasets = {
-        "train": read_pairs(args.train_file, decode=False),
-        "test": read_pairs(args.test_file, decode=False),
+        # "train": read_pairs(args.train_file, tuple_separator=" ▁|SEP|▁ ", token_separator=" ", decode=True),
+        "train": read_pairs(args.train_file, decode=True),
+        "test": read_pairs(args.test_file, decode=True),
     }
 
     merged_dataset = sorted([(tgt, idx if key == "test" else -1)

@@ -1,5 +1,5 @@
 import pickle
-from typing import List, Tuple
+from typing import List, Tuple, Iterator
 
 import flutes
 import numpy as np
@@ -21,14 +21,13 @@ class Args(Arguments):
     pickle_file: str = "outputs/test_output.pkl"
 
 
-def read_lines(path: str) -> List[str]:
+def read_lines(path: str) -> Iterator[str]:
     with flutes.progress_open(path) as f:
         lines = []
         for line in f:
             line = line.strip()
             if not line: continue
-            lines.append(line)
-    return lines
+            yield line
 
 
 def read_pairs(path: str, decode: bool = False,
@@ -41,9 +40,8 @@ def read_pairs(path: str, decode: bool = False,
                 tgt_len + 1 <= 512 and
                 lower <= src_len / tgt_len <= upper)
 
-    lines = read_lines(path)
     src_data, tgt_data = [], []
-    for line in lines:
+    for line in read_lines(path):
         example = line.split(tuple_separator)
         src, tgt, *_ = example
         if not _filter_fn(src, tgt):
@@ -140,13 +138,14 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
 
 def main():
     args = Args()
+    flutes.register_ipython_excepthook()
     src_data, tgt_data = read_pairs(args.data_file, decode=True)
     names = args.hyp_names.split(",")
     hyp_paths = args.hyp_files.split(",")
     assert len(names) == len(hyp_paths)
     hyp_data = {}
     for name, hyp_path in zip(names, hyp_paths):
-        hyp_data[name] = read_lines(hyp_path)
+        hyp_data[name] = list(read_lines(hyp_path))
     overlap_scores = [float(x) for x in read_lines(args.overlap_score_file)]
     # for idx, (tgt, ref) in enumerate(zip(tgt_data, ref_data)):
     #     if tgt != ref and "<unk>" not in ref:

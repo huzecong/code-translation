@@ -10,6 +10,7 @@ from .override import write_log
 from .train import Vocab
 
 __all__ = [
+    "DecodeMixin",
     "FileBLEU",
     "WordPieceBLEU",
 ]

@@ -150,6 +150,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
 
     def _retokenize(self, tokens: List[str]) -> List[str]:
         result = []
+        tokens = utils.DecodeMixin.spm_decode(tokens)
         for tok in tokens:
             result += self.sp.EncodeAsPieces(tok)
         return result
