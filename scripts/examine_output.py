@@ -1,5 +1,5 @@
 import pickle
-from typing import List, Tuple, Iterator
+from typing import List, Tuple, Iterator, overload, Any
 
 import flutes
 import numpy as np
@@ -7,6 +7,7 @@ import texar.torch as tx
 from argtyped import *
 from termcolor import colored
 from tqdm import tqdm
+from typing_extensions import Literal
 
 import cotra
 from cotra.utils.metric import DecodeMixin
@@ -16,22 +17,35 @@ class Args(Arguments):
     data_file: str = "data/processed/test.txt"  # original dataset
     hyp_names: str  # comma separated
     hyp_files: str = "outputs/test_repos_included.hyp.760k"  # hypotheses, comma separated
-    overlap_score_file: str = "data/processed/overlap_test.txt"  # overlap scores for test set
+    overlap_score_files: str = "data/processed/overlap_test.txt"  # overlap scores for test set, comma separated
     output_file: str = "outputs/test.annotated"
     pickle_file: str = "outputs/test_output.pkl"
 
 
-def read_lines(path: str) -> Iterator[str]:
-    with flutes.progress_open(path) as f:
-        lines = []
+def read_lines(path: str, verbose: bool = True) -> Iterator[str]:
+    with flutes.progress_open(path, verbose=verbose) as f:
         for line in f:
             line = line.strip()
             if not line: continue
             yield line
 
 
+@overload
 def read_pairs(path: str, decode: bool = False,
-               tuple_separator: str = "\1", token_separator: str = "\0") -> Tuple[List[str], List[str]]:
+               tuple_separator: str = "\1", token_separator: str = "\0",
+               verbose: bool = True, return_additional_data: Literal[False] = False) \
+        -> Tuple[List[str], List[str]]: ...
+
+
+@overload
+def read_pairs(path: str, decode: bool = False,
+               tuple_separator: str = "\1", token_separator: str = "\0",
+               verbose: bool = True, return_additional_data: Literal[True] = ...) \
+        -> Tuple[List[str], List[str], List[Tuple[Any, ...]]]: ...
+
+
+def read_pairs(path, decode=False, tuple_separator="\1", token_separator="\0",
+               verbose=True, return_additional_data=False):
     def _filter_fn(src: str, tgt: str) -> bool:
         src_len = src.count(token_separator) + 1  # count spaces instead of actually performing splitting
         tgt_len = tgt.count(token_separator) + 1
@@ -41,16 +55,21 @@ def read_pairs(path: str, decode: bool = False,
                 lower <= src_len / tgt_len <= upper)
 
     src_data, tgt_data = [], []
-    for line in read_lines(path):
+    additional_data = []
+    for line in read_lines(path, verbose=verbose):
         example = line.split(tuple_separator)
-        src, tgt, *_ = example
+        src, tgt, *additional = example
         if not _filter_fn(src, tgt):
             continue
+        if return_additional_data:
+            additional_data.append(additional)
         if decode:
             src = " ".join(DecodeMixin.spm_decode(src.split(token_separator)))
             tgt = " ".join(DecodeMixin.spm_decode(tgt.split(token_separator)))
         src_data.append(src)
         tgt_data.append(tgt)
+    if return_additional_data:
+        return src_data, tgt_data, additional_data
     return src_data, tgt_data
 
 
@@ -139,14 +158,21 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
 def main():
     args = Args()
     flutes.register_ipython_excepthook()
-    src_data, tgt_data = read_pairs(args.data_file, decode=True)
+    src_data, tgt_data, additional_data = read_pairs(args.data_file, decode=True, return_additional_data=True)
     names = args.hyp_names.split(",")
     hyp_paths = args.hyp_files.split(",")
     assert len(names) == len(hyp_paths)
     hyp_data = {}
     for name, hyp_path in zip(names, hyp_paths):
-        hyp_data[name] = list(read_lines(hyp_path))
-    overlap_scores = [float(x) for x in read_lines(args.overlap_score_file)]
+        hyp_data[name] = list(read_lines(hyp_path, verbose=False))
+    overlap_paths = args.overlap_score_files.split(",")
+    if len(overlap_paths) == 1:
+        overlap_paths = overlap_paths * len(names)
+    assert len(overlap_paths) == len(names)
+    overlap_scores = {}
+    for name, overlap_path in zip(names, overlap_paths):
+        scores = [float(x) for x in read_lines(overlap_path, verbose=False)]
+        overlap_scores[name] = scores
     # for idx, (tgt, ref) in enumerate(zip(tgt_data, ref_data)):
     #     if tgt != ref and "<unk>" not in ref:
     #         print(idx)
@@ -154,11 +180,13 @@ def main():
     #         print(ref)
     #         assert False
     # assert tgt_data == ref_data
-    assert len(src_data) == len(tgt_data) == len(overlap_scores)
-    assert all(len(data) == len(src_data) for data in hyp_data.values())
+    assert len(src_data) == len(tgt_data) == len(additional_data)
+    assert len(overlap_scores) == len(names) == len(hyp_data)
+    assert all(len(data) == len(src_data) == len(scores)
+               for data, scores in zip(hyp_data.values(), overlap_scores.values()))
 
     with open(args.pickle_file, "wb") as f:
-        obj = (names, src_data, tgt_data, hyp_data, overlap_scores)
+        obj = (names, src_data, tgt_data, hyp_data, overlap_scores, additional_data)
         pickle.dump(obj, f)
 
     return

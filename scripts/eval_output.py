@@ -630,23 +630,32 @@ class Evaluator:
             src_tokens: List[str], src_func_sig: FuncSignature,
             tgt_tokens: List[str], tgt_func_sig: FuncSignature,
             hyp_output: Dict[str, HypOutput],
-            overlap_score: float) -> str:
+            overlap_scores: Dict[str, float],
+            repo: Optional[str] = None, sha: Optional[str] = None) -> str:
 
         outputs: List[List[str]] = [
             self._generate_code_section("Decompiled (source)", src_tokens, src_func_sig),
-            self._generate_code_section(
-                "Original (target)", tgt_tokens, tgt_func_sig, additional=[
-                    f"Similarity Score: " + (f'<div class="highlight">{overlap_score:.3f}</div>'
-                                             if overlap_score >= 0.8 else f"{overlap_score:.3f}"),
-                ]),
+            self._generate_code_section("Original (target)", tgt_tokens, tgt_func_sig),
         ]
+        if repo is not None or sha is not None:
+            outputs.insert(0, [
+                Markdown.bold("Metadata"),
+                Markdown.list([
+                    *(["Repository: " + Markdown.link(repo, f"https://github.com/{repo}")] if repo is not None else []),
+                    *([f"Binary Hash: {sha}"] if sha is not None else []),
+                ])
+            ])
+
         for name, hyp in hyp_output.items():
             bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=4, smooth=True)
             bleu8 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=8, smooth=True)
             improvements = [key for key, diff in hyp.scores_diff.items() if diff > 0]
             deteriorates = [key for key, diff in hyp.scores_diff.items() if diff < 0]
+            score = overlap_scores[name]
             additional_evals = [
                 f"BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}",
+                f"Similarity Score: " + (f'<div class="highlight">{score:.3f}</div>'
+                                         if score >= 0.8 else f"{score:.3f}"),
             ]
             for list_name, items in [("Improvements", improvements), ("Deteriorations", deteriorates)]:
                 tag = Markdown.underline(f"{list_name} w.r.t Decompiled Code:")
@@ -671,7 +680,8 @@ class Evaluator:
             func_sig = FuncSignature(TypeSignature(["<parse failed>"], False), "<parse failed>", [])
         return tokens, func_sig, parsable
 
-    def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_score: float) -> None:
+    def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_scores: Dict[str, float],
+            repo: Optional[str] = None, sha: Optional[str] = None) -> None:
         src_tokens, src_func_sig, src_parsable = self._parse_raw_code(src)
         tgt_tokens, tgt_func_sig, _ = self._parse_raw_code(tgt)
         self.references.append(tgt_tokens)
@@ -715,7 +725,8 @@ class Evaluator:
 
         if self.export_path is not None:
             section = self._generate_markdown_section(
-                self.index, src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_score)
+                self.index, src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_scores,
+                repo, sha)
             self.export_sections.append(section)
             self.index += 1
 
@@ -877,11 +888,14 @@ class Evaluator:
             ]
             with open(self.export_path + ".md", "w") as f:
                 f.write("\n\n".join(sections))
-            subprocess.run(["pandoc", "--from", "gfm",
-                            "--to", "html", "--standalone",
-                            "--metadata", "title:Code Translation Evaluation",
-                            self.export_path + ".md", "--output", self.export_path])
-            print(colored(f"Generated output at {self.export_path}.md.html", "green"))
+            result = flutes.run_command([
+                "pandoc", "+RTS", "-K100000000", "-RTS",  # increase stack size
+                "--from", "gfm", "--to", "html", "--standalone",
+                "--metadata", "title:Code Translation Evaluation",
+                self.export_path + ".md", "--output", self.export_path], return_output=True)
+            if len(result.captured_output) > 0:
+                print(colored(result.captured_output, "red"))
+            print(colored(f"Generated output at {self.export_path}", "green"))
 
 
 class InputData(NamedTuple):
@@ -889,7 +903,8 @@ class InputData(NamedTuple):
     src_data: List[str]
     tgt_data: List[str]
     hyp_data: Dict[str, List[str]]
-    overlap_scores: List[float]
+    overlap_scores: Dict[str, List[float]]
+    additional_data: List[Tuple[str, str, str]]  # (score, repo, sha)
 
 
 def main():
@@ -904,7 +919,8 @@ def main():
             evaluator.add(src=data.src_data[idx],
                           tgt=data.tgt_data[idx],
                           hyps={name: data.hyp_data[name][idx] for name in data.names},
-                          overlap_score=data.overlap_scores[idx])
+                          overlap_scores={name: data.overlap_scores[name][idx] for name in data.names},
+                          repo=data.additional_data[idx][1], sha=data.additional_data[idx][2])
         evaluator.print_summary()
 
 
