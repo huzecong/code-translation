@@ -1,3 +1,4 @@
+# type: ignore
 """A module to override stupid Texar functionalities"""
 
 __all__ = [

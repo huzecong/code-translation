@@ -71,7 +71,6 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         self.delimiter = self._hparams.token_delimiter
         self.vocab = vocab
 
-        self.sp = None
         if self._hparams.use_alternate_vocab:
             self.sp = spm.SentencePieceProcessor()
             self.sp.Load(self._hparams.use_alternate_vocab + ".model")
@@ -92,7 +91,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         source = tx.data.SequenceDataSource(data)
         super().__init__(source, hparams, device)
 
-        self._competency = 100
+        self._competency = 100.0
         if self._hparams.curriculum.enabled:
             # Initialize current available dataset size to maximum, so we can know the actual size before training.
             self._curriculum_dataset_size = self._dataset_size
@@ -129,6 +128,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         anneal_steps = self._hparams.curriculum.steps
         competency = min(1.0, math.sqrt((1 - init_comp_sqr) * steps / anneal_steps + init_comp_sqr))
         # assert self._competency <= competency
+        assert self._dataset_size is not None
         new_size = int(competency * self._dataset_size)
         self._competency = competency
         self._curriculum_dataset_size = new_size
@@ -136,6 +136,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
     def __len__(self) -> int:
         if self._hparams.curriculum.enabled:
             # Return length based on competency schedule.
+            assert self._curriculum_dataset_size is not None
             return self._curriculum_dataset_size
         return super().__len__()
 
@@ -160,7 +161,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
         src, tgt, score = raw_example
         src_tokens = src.split(self.delimiter)
         tgt_tokens = tgt.split(self.delimiter)
-        if self.sp is not None:
+        if self._hparams.use_alternate_vocab:
             # Truncate sentences if too long.
             src_tokens = self._retokenize(src_tokens)[:(self._hparams.max_src_len - 1)]
             tgt_tokens = self._retokenize(tgt_tokens)[:(self._hparams.max_tgt_len - 1)]

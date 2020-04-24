@@ -71,25 +71,26 @@ def main() -> None:
     print(f"Random seed set to {config['random_seed']}")
 
     # Load data
-    datasets: Dict[str, flutes.MaybeDict[cotra.CodeData]] = {}
+    eval_datasets: Dict[str, Dict[str, cotra.CodeData]] = {}
     hparams = copy.deepcopy(config["data"]["hparams"])
     if args.use_alternate_vocab is not None:
         hparams["use_alternate_vocab"] = args.use_alternate_vocab
         vocab = cotra.utils.Vocab.load(args.use_alternate_vocab + ".vocab")
     else:
         vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
+    train_dataset = None
     if args.run_mode == "train":
-        datasets["train"] = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
+        train_dataset = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
             "shuffle": True, "curriculum": {"enabled": args.curriculum},
             "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs,
             **hparams,
         })
-    eval_splits: Dict[str, flutes.MaybeDict[str]] = {
+    eval_splits: Dict[str, Dict[str, str]] = {
         "valid": config["data"]["valid_sets"],
         "test": config["data"]["test_sets"],
     }
     for split, paths in eval_splits.items():
-        datasets[split] = {
+        eval_datasets[split] = {
             f"{split}_{name}": cotra.CodeData(path=path, vocab=vocab, hparams={
                 "shuffle": False, "curriculum": {"enabled": False},
                 "batch_size": config["training"]["test_batch_size"],
@@ -114,15 +115,16 @@ def main() -> None:
     encoding = config["data"].get("encoding", None)
     training_config = config["training"]
     test_output_path = output_dir / "test.output"
+    valid_set = eval_datasets["valid"]["valid_repos_included"]
     executor = Executor(
         model=model,
-        train_data=datasets.get("train", None),
-        valid_data=datasets["valid"]["valid_repos_included"],
-        test_data=datasets["test"],
+        train_data=train_dataset,
+        valid_data=valid_set,
+        test_data=eval_datasets["test"],
         batching_strategy=batching_strategy,
         optimizer=optim,
         lr_scheduler=scheduler,
-        log_destination=[sys.stdout] + ([output_dir / "log.txt"] if not args.debug else []),
+        log_destination=[sys.stdout, *([output_dir / "log.txt"] if not args.debug else [])],
         log_every=cond.iteration(training_config["display_steps"]),
         validate_every=cond.iteration(training_config["eval_steps"]),
         stop_training_on=cond.iteration(training_config["max_train_steps"]),
@@ -131,7 +133,7 @@ def main() -> None:
         log_format="{time} : Epoch {epoch:2d} @ {iteration:6d}it "
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
         valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
-                                                sample_output_per=len(datasets["valid"]) // 10),
+                                                sample_output_per=len(valid_set) // 10),
         test_metrics=[cotra.utils.FileBLEU(vocab, test_output_path, encoding=encoding),
                       ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",
@@ -144,31 +146,34 @@ def main() -> None:
         show_live_progress=True,
     )
 
-    executor.write_log("Data size: " + repr({key: len(split) for key, split in datasets.items()}))
+    all_datasets = {"train": train_dataset,
+                    **{key: value for datasets in eval_datasets.values() for key, value in datasets.items()}}
+    executor.write_log("Data size: " +
+                       repr({key: len(split) for key, split in all_datasets.items() if split is not None}))
 
     if args.curriculum:
         @executor.on_event(cond.Event.Epoch, 'begin')
         def update_dataset_steps(exc: Executor):
-            training_set = datasets["train"]
-            training_set.update_steps(exc.status["iteration"])
-            exc._train_tracker.set_size(len(training_set))
-            exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {training_set.competency * 100:6.2f}%")
+            assert train_dataset is not None
+            train_dataset.update_steps(exc.status["iteration"])
+            exc._train_tracker.set_size(len(train_dataset))
+            exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {train_dataset.competency * 100:6.2f}%")
 
     @executor.on(cond.validation(better=True))
     def test_on_excluded_validation_set(exc: Executor):
-        exc.test({"valid_repos_excluded": datasets["valid"]["valid_repos_excluded"]})
+        exc.test({"valid_repos_excluded": eval_datasets["valid"]["valid_repos_excluded"]})
 
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":
         if args.load_checkpoint:
             load_path = executor.load(path=args.checkpoint_path, allow_failure=True)
             if load_path is not None:
-                executor.test(datasets["valid"])
+                executor.test(eval_datasets["valid"])
 
         executor.train()
     else:
         executor.load(path=args.checkpoint_path, load_training_state=False)
-        for name, dataset in datasets[args.run_mode].items():
+        for name, dataset in eval_datasets[args.run_mode].items():
             executor.test({name: dataset})
             # Manually rename the test output file.
             os.rename(str(test_output_path) + ".hyp", output_dir / args.test_output_file.format(split=name))

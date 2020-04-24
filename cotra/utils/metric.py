@@ -6,7 +6,7 @@ from termcolor import colored
 from texar import torch as tx
 from texar.torch.run import metric
 
-from .override import write_log
+from .override import write_log  # type: ignore[attr-defined]
 from .train import Vocab
 
 __all__ = [

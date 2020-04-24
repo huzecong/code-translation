@@ -60,14 +60,14 @@ class CategoryCounter(Generic[T]):
 
     def to_string(self, group_fn: Optional[Callable[[T], R]] = None) -> str:
         if group_fn is not None:
-            groups = self.group_by(group_fn)
+            groups: Dict[Optional[R], List[Tuple[T, int]]] = self.group_by(group_fn)
         else:
             groups = {None: list(self.counter.items())}
         strings = []
         for key, group in sorted(groups.items()):
             total = sum(v for _, v in group)
             vals = ", ".join(f"{k}: {v} / {total}" for k, v in sorted(group))
-            strings.append((key + ": " if key is not None else "") + vals)
+            strings.append((str(key) + ": " if key is not None else "") + vals)
         return "\n".join(strings)
 
 
@@ -249,6 +249,9 @@ class Stats:
         self.deteriorated_examples = {key: [] for key in self.KEYS}
 
 
+Tokens = List[str]
+
+
 class Evaluator:
     DECOMPILED_NAME = "Decompiled"
 
@@ -257,8 +260,8 @@ class Evaluator:
         self.names = names
         self.name_ids = OrderedDict((name, Markdown.to_id(name)) for name in names)
 
-        self.references = []
-        self.hypotheses = {name: [] for name in [self.DECOMPILED_NAME] + names}
+        self.references: List[Tokens] = []
+        self.hypotheses: Dict[str, List[Tokens]] = {name: [] for name in [self.DECOMPILED_NAME] + names}
 
         self.export_path = export
         if export is not None:
@@ -266,7 +269,7 @@ class Evaluator:
             self.export_sections: List[str] = []
 
     @classmethod
-    def _parse_func(cls, code: List[str], syntax_correct: bool = True) -> FuncSignature:
+    def _parse_func(cls, code: Tokens, syntax_correct: bool = True) -> FuncSignature:
         braces_map = {
             "{": ("{}", 1),
             "}": ("{}", -1),
@@ -286,9 +289,10 @@ class Evaluator:
                 end += len(code)
             return next(idx for idx in range(end, -1, -1) if code[idx] == token)
 
-        def _check_balance(indices: Iterator[int], callback: Callable[[int, bool, Dict[str, int]], T]) -> T:
+        def _check_balance(indices: Iterable[int], callback: Callable[[int, bool, Dict[str, int]], T]) \
+                -> Optional[T]:
             # callback: (idx, is_balanced, balance) -> ret?
-            balance = defaultdict(int)
+            balance: Dict[str, int] = defaultdict(int)
             for idx in indices:
                 if code[idx] in braces_map:
                     kind, delta = braces_map[code[idx]]
@@ -297,8 +301,9 @@ class Evaluator:
                 ret = callback(idx, is_balance, balance)
                 if ret is not None:
                     return ret
+            return None
 
-        def _find_match(indices: Iterator[int], token: str) -> int:
+        def _find_match(indices: Iterable[int], token: str) -> int:
             ret = _check_balance(indices, lambda idx, is_bal, _: idx if is_bal else None)
             assert ret is not None and code[ret] == token
             return ret
@@ -320,7 +325,7 @@ class Evaluator:
             indices = []
             _check_balance(
                 range(l, r + 1), lambda idx, is_bal, _:
-                indices.append(idx) if code[idx] == token and is_bal else None)
+                indices.append(idx) if code[idx] == token and is_bal else None)  # type: ignore[func-returns-value]
             return indices
 
         def parse_vardef(l: int, r: int) -> Tuple[TypeSignature, str]:
@@ -335,6 +340,7 @@ class Evaluator:
             def callback(idx: int, _, balance: Dict[str, int]) -> Optional[int]:
                 if balance['[]'] == 0 and balance['{}'] == 0 and code[idx].isidentifier():
                     return idx
+                return None
 
             lparen_pos = _check_balance(
                 range(l, r + 1), lambda idx, _, balance:
@@ -352,7 +358,8 @@ class Evaluator:
             new_type = []
             _check_balance(
                 range(l, r + 1), lambda idx, _, balance:
-                new_type.append(code[idx]) if idx != index and (code[idx] in "[]" or balance['[]'] == 0) else None)
+                new_type.append(code[idx])  # type: ignore[func-returns-value]
+                if idx != index and (code[idx] in "[]" or balance['[]'] == 0) else None)
             return TypeSignature(new_type, ptr_level), name
 
         if syntax_correct:
@@ -382,8 +389,8 @@ class Evaluator:
                 arg_boundaries = [arg_rparen_pos] + semicolon_pos
             args = [parse_vardef(l + 1, r - 1) for l, r in zip(arg_boundaries, arg_boundaries[1:])]
 
-        if ret_type == "":
-            ret_type = "void"
+        if ret_type.type == [""]:
+            ret_type = TypeSignature(["void"], 0)
         return FuncSignature(ret_type, func_name, args)
 
     @classmethod
@@ -476,7 +483,7 @@ class Evaluator:
         ret_type_strict: int  # 1 for correct
         arg_name: int  # +1 for each correct, -1 for each missing or redundant
         arg_type: int  # +1 for each correct, -1 for each missing or incorrect
-        arg_types_strict: int  # same as above
+        arg_type_strict: int  # same as above
         pointer_conversion: int  # +1 for each true positive, -1 for each missing or false positive
 
     def _get_score(self, eval_output: 'Evaluator.EvalOutput') -> EvalScore:
@@ -515,7 +522,7 @@ class Evaluator:
     def _prettify(cls, tokens: List[str]) -> str:
         lines = []
         indent = 0
-        line = []
+        line: Tokens = []
 
         def add_space(left: str, right: str) -> bool:
             if left in ["(", "!", "~", "[", ".", "->"]: return False
@@ -622,7 +629,7 @@ class Evaluator:
     class HypOutput(NamedTuple):
         tokens: List[str]
         func_sig: FuncSignature
-        is_correct: 'EvalOutput'
+        is_correct: 'Evaluator.EvalOutput'
         scores_diff: Dict[str, int]
 
     def _generate_markdown_section(
@@ -699,7 +706,8 @@ class Evaluator:
                     stats.deteriorated_examples["unparsable"].append(self.index)
                 is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig, stats)
                 scores_hyp = self._get_score(is_correct_hyp)
-                scores_diff = {key: sign(scores_hyp[key] - scores_src[key]) for key in scores_hyp.keys()}
+                scores_diff = {key: sign(scores_hyp[key] - scores_src[key])  # type: ignore[misc]
+                               for key in scores_hyp.keys()}
                 for key, diff in scores_diff.items():
                     stats.improving.add([(key, diff)])
                     if diff == -1:
@@ -750,10 +758,11 @@ class Evaluator:
             colored("Redundant arguments", "red"),
             colored("Pointer conversion", "green"),
         ]
+        references = [[tgt] for tgt in self.references]
         summary_table_cols: List[List[str]] = [[
             name,
-            f"{tx.evals.corpus_bleu([[tgt] for tgt in self.references], self.hypotheses[name], max_order=4):.2f}",
-            f"{tx.evals.corpus_bleu([[tgt] for tgt in self.references], self.hypotheses[name], max_order=8):.2f}",
+            f"{tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=4):.2f}",  # type: ignore[arg-type]
+            f"{tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=8):.2f}",  # type: ignore[arg-type]
             str(stats.unparsable),
             str(stats.fn_name),
             str(stats.fn_ret_type),
@@ -765,7 +774,8 @@ class Evaluator:
             str(stats.redundant_args),
             f"P: {stats.pointer.precision}, R: {stats.pointer.recall}",
         ] for name, stats in self.stats.items()]
-        summary_table: List[List[str]] = list(zip(*([summary_table_col_headers] + summary_table_cols)))  # transpose
+        summary_table: List[List[str]] = list(
+            map(list, zip(*([summary_table_col_headers] + summary_table_cols))))  # transpose
         summary_table_str = Markdown.table(summary_table, ["left"] + ["right"] * len(summary_table_cols))
 
         improvement_tables: Dict[str, str] = OrderedDict()
@@ -893,8 +903,8 @@ class Evaluator:
                 "--from", "gfm", "--to", "html", "--standalone",
                 "--metadata", "title:Code Translation Evaluation",
                 self.export_path + ".md", "--output", self.export_path], return_output=True)
-            if len(result.captured_output) > 0:
-                print(colored(result.captured_output, "red"))
+            if result.captured_output is not None and len(result.captured_output) > 0:
+                print(colored(result.captured_output.decode('utf-8'), "red"))
             print(colored(f"Generated output at {self.export_path}", "green"))
 
 
