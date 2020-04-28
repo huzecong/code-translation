@@ -1,21 +1,21 @@
 random_seed: 1234
 
 data:
-  training_set: "data/processed/train.txt"
+  training_set: "data/processed_notok/train.txt"
   valid_sets:
-    repos_included: "data/processed/valid.txt"
-    repos_excluded: "data/processed/valid_exclude.txt"
+    repos_included: "data/processed_notok/valid.txt"
+    repos_excluded: "data/processed_notok/valid_exclude.txt"
   test_sets:
-    repos_included: "data/processed/test.txt"
-    repos_excluded: "data/processed/test_exclude.txt"
-  vocab_file: "data/processed/vocab.vocab"
-  encoding: "spm"
+    repos_included: "data/processed_notok/test.txt"
+    repos_excluded: "data/processed_notok/test_exclude.txt"
+  vocab_file: "data/vocab.vocab"
   verbose: true
   hparams:
     tuple_delimiter: "\u0001"
     token_delimiter: "\u0000"
     max_src_len: 512
     max_tgt_len: 512
+    spm_model: "data/vocab.model"
 
 model:
   hidden_dim: 512

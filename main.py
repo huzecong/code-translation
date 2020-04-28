@@ -23,11 +23,11 @@ class Args(Arguments):
     test_output_file: str = "{split}.hyp.orig"
     load_checkpoint: Switch = False
     checkpoint_path: Optional[str] = None
-    use_alternate_vocab: Optional[str] = None
     pdb: Switch = False
     n_procs: int = 0
     curriculum: Switch = True
     debug: Switch = False
+    force: Switch = False
 
 
 class ModelWrapper(nn.Module):
@@ -70,14 +70,15 @@ def main() -> None:
     tx.run.make_deterministic(config["random_seed"])
     print(f"Random seed set to {config['random_seed']}")
 
+    output_dir = Path(args.output_dir)
+    if not args.debug and output_dir.exists() and not args.force:
+        print(colored(f"Output folder '{str(output_dir)}' exists, use --force to overwrite."))
+        sys.exit(1)
+
     # Load data
     eval_datasets: Dict[str, Dict[str, cotra.CodeData]] = {}
     hparams = copy.deepcopy(config["data"]["hparams"])
-    if args.use_alternate_vocab is not None:
-        hparams["use_alternate_vocab"] = args.use_alternate_vocab
-        vocab = cotra.utils.Vocab.load(args.use_alternate_vocab + ".vocab")
-    else:
-        vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
+    vocab = cotra.utils.Vocab.load(config["data"]["vocab_file"])
     train_dataset = None
     if args.run_mode == "train":
         train_dataset = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
@@ -92,13 +93,16 @@ def main() -> None:
     for split, paths in eval_splits.items():
         eval_datasets[split] = {
             f"{split}_{name}": cotra.CodeData(path=path, vocab=vocab, hparams={
+                **hparams,
                 "shuffle": False, "curriculum": {"enabled": False},
                 "batch_size": config["training"]["test_batch_size"],
                 "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1,
-                **hparams,
+                # Evaluation must use truncate mode -- no example in the test set should be discarded.
+                "length_filter_mode": "truncate",
             }) for name, path in paths.items()
         }
-    batching_strategy = cotra.PairedTextTokenCountBatchingStrategy(config["training"]["max_batch_tokens"])
+    batching_strategy = cotra.CustomBatchingStrategy(config["training"]["max_batch_tokens"])
+    print("Dataset initialized")
 
     # Create model and optimizer
     model = cotra.Transformer(vocab, hparams=config["model"])
@@ -110,9 +114,8 @@ def main() -> None:
     scheduler_lambda = cotra.utils.get_lr_schedule(static=is_static_lr, warmup_steps=lr_config["warmup_steps"])
     optim = torch.optim.Adam(model.parameters(), lr=lr_config["init_lr"], betas=(0.9, 0.997), eps=1e-9)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optim, scheduler_lambda)
+    print("Model constructed")
 
-    output_dir = Path(args.output_dir)
-    encoding = config["data"].get("encoding", None)
     training_config = config["training"]
     test_output_path = output_dir / "test.output"
     valid_set = eval_datasets["valid"]["valid_repos_included"]
@@ -132,10 +135,10 @@ def main() -> None:
                        ("lr", metric.LR(optim))],
         log_format="{time} : Epoch {epoch:2d} @ {iteration:6d}it "
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
-        valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding,
+        valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding="spm",
                                                 sample_output_per=len(valid_set) // 10),
-        test_metrics=[cotra.utils.FileBLEU(vocab, test_output_path, encoding=encoding),
-                      ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding=encoding))],
+        test_metrics=[cotra.utils.FileBLEU(vocab, test_output_path, encoding="spm"),
+                      ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding="spm"))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",
         test_progress_log_format=("{time} : Evaluating on {split} ({progress}%, {speed}), "
                                   "unofficial BLEU = {unofficial_bleu:.2f}"),

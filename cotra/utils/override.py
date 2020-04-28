@@ -1,15 +1,43 @@
 # type: ignore
 """A module to override stupid Texar functionalities"""
+from typing import TypeVar
+
+import torch
 
 __all__ = [
     "write_log",
 ]
 
-# Monkey-patch `RandomSampler` for our use case specifically.
+T = TypeVar('T')
 
+# Monkey-patch `RandomSampler` for our use case specifically.
 from texar.torch.data.data.sampler import RandomSampler
 
-RandomSampler._iterator_unknown_size = lambda self: self._iterator_given_size(None)
+
+def _RandomSampler_iterator_given_size(self, size: int):
+    order = torch.randperm(size).tolist()
+    for idx in order:
+        self._data._prefetch_source(idx)
+        yield idx
+
+
+def _RandomSampler_iterator_unknown_size(self):
+    return self._iterator_given_size(len(self._data))
+
+
+RandomSampler._iterator_given_size = _RandomSampler_iterator_given_size
+RandomSampler._iterator_unknown_size = _RandomSampler_iterator_unknown_size
+
+# Prevent `_CachedDataSource` from deleting stuff.
+import texar.torch.data.data.data_base
+
+
+class _PatchedCachedDataSource(texar.torch.data.data.data_base._CachedDataSource[T]):
+    def __init__(self, data_source, erase_after_access: bool = False):
+        super().__init__(data_source, erase_after_access=False)  # False whatever
+
+
+texar.torch.data.data.data_base._CachedDataSource = _PatchedCachedDataSource
 
 # Make `Executor` a singleton class so we can have a globally available `write_log` method.
 from texar.torch.run.executor import Executor

@@ -195,6 +195,17 @@ def main():
     with (output_dir / "split_indices.pkl").open("wb") as f:
         pickle.dump(splits, f)
 
+    for key, indices in splits.items():
+        if key.startswith("train"):
+            indices.sort(key=lambda i: scores[i])  # sort indices according to competency score, only for training set
+        with (output_dir / f"{key}.txt").open("w") as f:
+            for idx in tqdm(indices, desc=f"Writing {key} set", leave=False):
+                src, tgt = data[idx]
+                output = TUPLE_SEP.join((src, tgt, str(scores[idx]), data[idx].repo, data[idx].sha))
+                f.write(output)
+                f.write("\n")
+        print(f"{key.capitalize()} set written")
+
     # Write out training text and train SentencePiece model.
     train_text_path = output_dir / "train_text.txt"
     with train_text_path.open("w") as f:
@@ -208,21 +219,12 @@ def main():
     }
     spm.SentencePieceTrainer.Train(" ".join(f"--{name}={str(value)}" for name, value in spm_train_args.items()))
 
-    # Encode all sentences with the trained SP model.
-    with flutes.safe_pool(args.n_procs, state_class=EncodeSPMState, init_args=(output_dir / "vocab.model",)) as pool:
-        processed_code = list(pool.imap(
-            EncodeSPMState.encode_spm,
-            map(lambda ex: (ex.decompiled_code, ex.original_code),
-                tqdm(data, desc="Computing scores")), chunksize=args.block_size))
-
-    for key, indices in splits.items():
-        with (output_dir / f"{key}.txt").open("w") as f:
-            for idx in tqdm(indices, desc=f"Writing {key} set", leave=False):
-                src, tgt = processed_code[idx]
-                output = TUPLE_SEP.join((src, tgt, str(scores[idx]), data[idx].repo, data[idx].sha))
-                f.write(output)
-                f.write("\n")
-        print(f"{key.capitalize()} set written")
+    # # Encode all sentences with the trained SP model.
+    # with flutes.safe_pool(args.n_procs, state_class=EncodeSPMState, init_args=(output_dir / "vocab.model",)) as pool:
+    #     processed_code = list(pool.imap(
+    #         EncodeSPMState.encode_spm,
+    #         map(lambda ex: (ex.decompiled_code, ex.original_code),
+    #             tqdm(data, desc="Encoding with SPM")), chunksize=args.block_size))
 
 
 if __name__ == '__main__':
