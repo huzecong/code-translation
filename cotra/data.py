@@ -1,5 +1,6 @@
+import itertools
 import math
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Iterator
 
 import flutes
 import numpy as np
@@ -11,21 +12,39 @@ from bashplotlib.histogram import plot_hist
 from . import utils
 
 __all__ = [
+    "InputData",
     "Example",
     "CodeData",
     "CustomBatchingStrategy",
 ]
 
 T = TypeVar('T')
-RawExample = Tuple[str, str, float]
+
+TOKEN_SEP = "\0"
+TUPLE_SEP = "\1"
 
 
 class InputData(NamedTuple):
     decompiled_code: str
     original_code: str
+    var_names: Dict[str, Tuple[str, str]]  # (var_id) -> (decomp_var_name, orig_var_name)
     score: float
     repo: str  # "owner/name"
     sha: str
+
+    @staticmethod
+    def encode(src: str, tgt: str, var_names: Dict[str, Tuple[str, str]], score: float, repo: str, sha: str) -> str:
+        names = TOKEN_SEP.join(itertools.chain.from_iterable([k, a, b] for k, (a, b) in var_names.items()))
+        return TUPLE_SEP.join((src, tgt, names, str(score), repo, sha))
+
+    @staticmethod
+    def decode(encoded: str) -> 'InputData':
+        src, *_tgt, names, score, repo, sha = encoded.split(TUPLE_SEP)
+        tgt = TUPLE_SEP.join(_tgt) if len(_tgt) != 1 else _tgt[0]
+        var_names = {}
+        if names != "":
+            var_names = {k: (a, b) for k, a, b in flutes.chunk(3, names.split(TOKEN_SEP))}
+        return InputData(src, tgt, var_names, float(score), repo, sha)
 
 
 class Example(NamedTuple):
@@ -36,35 +55,32 @@ class Example(NamedTuple):
     score: float
 
 
-class CodeDataSource(tx.data.DataSource[RawExample]):
+class CodeDataSource(tx.data.DataSource[InputData]):
     def __init__(self, path: str, hparams=None):
         self._hparams = tx.HParams(hparams, self.default_hparams())
         self.path = path
-        self.delimiter = self._hparams.tuple_delimiter
 
     @staticmethod
     def default_hparams():
         return {
-            "tuple_delimiter": "\1",
             "verbose": True,
         }
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[InputData]:
         with flutes.progress_open(self.path, "r", verbose=self._hparams.verbose, desc=f"Reading {self.path}") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                splits = line.split(self.delimiter)
-                src, tgt, score, *_ = splits
-                yield src, tgt, score
+                yield InputData.decode(line)
 
 
-class CodeData(tx.data.DatasetBase[RawExample, Example]):
+class CodeData(tx.data.DatasetBase[InputData, Example]):
     def __init__(self, path: str, vocab: utils.Vocab,
                  hparams: Optional[Dict[str, Any]] = None, device: Optional[torch.device] = None):
         self._hparams = tx.HParams(hparams, self.default_hparams())
         self.delimiter = self._hparams.token_delimiter
+        self.variable_name_idx = {"decompiled": 0, "original": 1}[self._hparams.variable_name]
         self.vocab = vocab
 
         if self._hparams.spm_model is not None:
@@ -72,7 +88,6 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             self.sp.Load(self._hparams.spm_model)
 
         file_source = CodeDataSource(path, hparams={
-            "tuple_delimiter": self._hparams.tuple_delimiter,
             "verbose": self._hparams.verbose,
         })
         # if self._hparams.curriculum.enabled:
@@ -103,7 +118,7 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             "max_tgt_len": 1024,
             "valid_src_tgt_length_ratio": (0.5, 3.0),  # 0.5 <= len(src) / len(tgt) <= 3.0
             "lazy_strategy": "process",
-            "cache_strategy": "processed",
+            "cache_strategy": "loaded",
             "curriculum": {
                 "enabled": True,
                 "init_competency": 0.01,
@@ -111,9 +126,9 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             },
             "shuffle_buffer_size": None,
             "verbose": False,
-            "tuple_delimiter": " ▁|SEP|▁ ",
-            "token_delimiter": " ",
+            "token_delimiter": TOKEN_SEP,
             "spm_model": None,
+            "variable_name": "decompiled",  # "decompiled", "original"
             "length_filter_mode": "truncate",  # "truncate", "discard"
         }
 
@@ -152,10 +167,16 @@ class CodeData(tx.data.DatasetBase[RawExample, Example]):
             result += self.sp.EncodeAsPieces(tok)
         return result
 
-    def process(self, raw_example: RawExample) -> Optional[Example]:  # type: ignore[override]
+    def process(self, ex: InputData) -> Optional[Example]:  # type: ignore[override]
         # Convert to IDs and add EOS tokens.
-        src, tgt, score = raw_example
+        src = ex.decompiled_code
+        tgt = ex.original_code
+        score = ex.score
         src_tokens = src.split(self.delimiter)
+        # Replace variable IDs with appropriate names.
+        for idx, token in enumerate(src_tokens):
+            if token in ex.var_names:
+                src_tokens[idx] = ex.var_names[token][self.variable_name_idx]
         tgt_tokens = tgt.split(self.delimiter)
         if self._hparams.spm_model is not None:
             src_tokens = self._tokenize(src_tokens)

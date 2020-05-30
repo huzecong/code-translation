@@ -82,9 +82,11 @@ def main() -> None:
     train_dataset = None
     if args.run_mode == "train":
         train_dataset = cotra.CodeData(path=config["data"]["training_set"], vocab=vocab, hparams={
-            "shuffle": True, "curriculum": {"enabled": args.curriculum},
-            "verbose": config["data"]["verbose"], "num_parallel_calls": args.n_procs,
             **hparams,
+            "shuffle": True,
+            "curriculum": {"enabled": args.curriculum},
+            "verbose": config["data"]["verbose"],
+            "num_parallel_calls": args.n_procs,
         })
     eval_splits: Dict[str, Dict[str, str]] = {
         "valid": config["data"]["valid_sets"],
@@ -96,7 +98,7 @@ def main() -> None:
                 **hparams,
                 "shuffle": False, "curriculum": {"enabled": False},
                 "batch_size": config["training"]["test_batch_size"],
-                "lazy_strategy": "none", "max_dataset_size": 500 if split == "valid" else -1,
+                "max_dataset_size": 500 if split == "valid" else -1,
                 # Evaluation must use truncate mode -- no example in the test set should be discarded.
                 "length_filter_mode": "truncate",
             }) for name, path in paths.items()
@@ -118,7 +120,7 @@ def main() -> None:
 
     training_config = config["training"]
     test_output_path = output_dir / "test.output"
-    valid_set = eval_datasets["valid"]["valid_repos_included"]
+    valid_set = next(iter(eval_datasets["valid"].values()))  # only validate on first valid split
     executor = Executor(
         model=model,
         train_data=train_dataset,
@@ -162,9 +164,9 @@ def main() -> None:
             exc._train_tracker.set_size(len(train_dataset))
             exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {train_dataset.competency * 100:6.2f}%")
 
-    @executor.on(cond.validation(better=True))
-    def test_on_excluded_validation_set(exc: Executor):
-        exc.test({"valid_repos_excluded": eval_datasets["valid"]["valid_repos_excluded"]})
+    # @executor.on(cond.validation(better=True))
+    # def test_on_excluded_validation_set(exc: Executor):
+    #     exc.test({"valid_repos_excluded": eval_datasets["valid"]["valid_repos_excluded"]})
 
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":

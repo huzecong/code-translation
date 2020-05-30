@@ -1,4 +1,5 @@
 import functools
+import json
 import multiprocessing as mp
 import os
 import pickle
@@ -78,14 +79,17 @@ def process(repo_info: RepoInfo, data_dir: str, queue: 'mp.Queue[QueueElem]') ->
         for line in f:
             if not line:
                 continue
-            matched_func = ujson.loads(line)
+            try:
+                matched_func = ujson.loads(line)
+            except ValueError:
+                # `ujson` has a hard-coded depth limit of 1024. If limit is reached, fallback to built-in `json`.
+                matched_func = json.loads(line)
             decompiled_code = convert_code(matched_func['decompiled_tokens'])
             original_code = convert_code(matched_func['original_tokens'])
-            decompiled_ast = matched_func['decompiled_ast_json']
-            original_ast = matched_func['original_ast_json']
+            var_names = {k: (decomp, orig) for k, [decomp, orig] in matched_func['variable_names'].items()}
             sha = matched_func['binary_hash']
             # Dump it here; otherwise the queue thread will do all the dumping.
-            example = pickle.dumps((decompiled_code, original_code, decompiled_ast, original_ast, repo, sha),
+            example = pickle.dumps((decompiled_code, original_code, var_names, repo, sha),
                                    protocol=PICKLE_PROTOCOL)
             queue.put(example)
     queue.put(END_SIGNATURE)
@@ -119,18 +123,14 @@ def main():
         progress = tqdm.tqdm(total=len(repos))
         file_cnt = 0
         text_data = []
-        ast_data = []
 
         def save_file():
-            nonlocal file_cnt, text_data, ast_data
+            nonlocal file_cnt, text_data
             # Save text & AST separately
-            with (output_dir / f"data_text_{file_cnt:03d}.pkl").open("wb") as f:
+            with (output_dir / f"data_{file_cnt:03d}.pkl").open("wb") as f:
                 pickle.dump(text_data, f, protocol=PICKLE_PROTOCOL)
-            with (output_dir / f"data_ast_{file_cnt:03d}.pkl").open("wb") as f:
-                pickle.dump(ast_data, f, protocol=PICKLE_PROTOCOL)
             progress.write(f"Saved part {file_cnt:03d}")
             text_data = []
-            ast_data = []
             file_cnt += 1
 
         while end_signals < len(repos):
@@ -144,8 +144,7 @@ def main():
             original_code = ex[1]
             if original_code not in original_code_set:
                 original_code_set.add(original_code)
-                text_data.append((ex[0], ex[1], ex[4], ex[5]))  # (decompiled, orig, repo, sha)
-                ast_data.append((ex[2], ex[3]))
+                text_data.append(ex)  # (decompiled, orig, var_names, repo, sha)
                 n_examples += 1
             else:
                 n_duplicate += 1

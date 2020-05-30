@@ -1,21 +1,18 @@
-random_seed: 1234
+random_seed: 19260817
 
 data:
-  training_set: "data/processed_notok/train.txt"
+  training_set: "data/processed/train.txt"
   valid_sets:
-    repos_included: "data/processed_notok/valid.txt"
-    repos_excluded: "data/processed_notok/valid_exclude.txt"
+    default: "data/processed/valid.txt"
   test_sets:
-    repos_included: "data/processed_notok/test.txt"
-    repos_excluded: "data/processed_notok/test_exclude.txt"
-  vocab_file: "data/vocab.vocab"
+    default: "data/processed/test.txt"
+  vocab_file: "data/processed/vocab.vocab"
   verbose: true
   hparams:
-    tuple_delimiter: "\u0001"
     token_delimiter: "\u0000"
     max_src_len: 512
     max_tgt_len: 512
-    spm_model: "data/vocab.model"
+    spm_model: "data/processed/vocab.model"
 
 model:
   hidden_dim: 512
@@ -31,9 +28,9 @@ training:
   max_batch_tokens: 4096
   test_batch_size: 16
 
-  max_train_steps: 1000000
+  max_train_steps: 2000000
   display_steps: 500
-  eval_steps: 10000
+  eval_steps: 20000
 
 inference:
   beam_width: 5
