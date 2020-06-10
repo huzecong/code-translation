@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 PYTHONPATH=. python scripts/examine_output.py \
-  --data-file data/processed/test_exclude.txt \
-  --overlap-score-files "data/processed/overlap_origtrain_test_exclude.txt,data/processed/overlap_test_exclude.txt,data/processed/overlap_test_exclude.txt" \
-  --hyp-names "Small (100k it),Large (100k it),Large (760k it)" \
-  --hyp-files "outputs/test_repos_excluded.hyp.orig,outputs/test_repos_excluded.hyp.100k,outputs/test_repos_excluded.hyp.760k" \
-  --pickle-file outputs/test_output_excluded.pkl
-
-PYTHONPATH=. python scripts/examine_output.py \
-  --data-file data/processed/test.txt \
-  --overlap-score-files "data/processed/overlap_origtrain_test_include.txt,data/processed/overlap_test_include.txt,data/processed/overlap_test_include.txt" \
-  --hyp-names "Small (100k it),Large (100k it),Large (760k it)" \
-  --hyp-files "outputs/test_repos_included.hyp.orig,outputs/test_repos_included.hyp.100k,outputs/test_repos_included.hyp.760k" \
-  --pickle-file outputs/test_output_included.pkl
+  --hyp-names "Decompiled Var Names,Oracle Var Names,Decompiled + Fine-tune,Oracle + Fine-tune" \
+  --overlap-score-files "data/processed/overlap_test.txt,data/processed/overlap_test.txt,data/processed/overlap_extra_test.txt,data/processed/overlap_extra_test.txt" \
+  --hyp-files "outputs_decomp_varname/test_default.hyp.orig,outputs_orig_varname/test_default.hyp.orig,outputs_decomp_varname_finetune/test_default.hyp.orig,outputs_orig_varname_finetune/test_default.hyp.orig" \
+  --pickle-file test_output.pkl \
+  --output-file test.annotated

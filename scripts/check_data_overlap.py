@@ -13,7 +13,7 @@ from examine_output import read_pairs
 
 
 class Args(Arguments):
-    train_file: str = "data/processed/train.txt"
+    train_files: str = "data/processed/train.txt"  # comma-separated
     test_file: str = "data/processed/test.txt"
     output_file: str = "data/processed/overlap_test.txt"
 
@@ -29,9 +29,15 @@ def main():
     args = Args()
     datasets = {
         # "train": read_pairs(args.train_file, tuple_separator=" ▁|SEP|▁ ", token_separator=" ", decode=True),
-        "train": read_pairs(args.train_file, decode=True),
-        "test": read_pairs(args.test_file, decode=True),
+        # "train": read_pairs(args.train_file),
+        "test": read_pairs(args.test_file),
     }
+    train_src, train_tgt = [], []
+    for train_path in args.train_files.split(","):
+        cur_src, cur_tgt = read_pairs(train_path)
+        train_src += cur_src
+        train_tgt += cur_tgt
+    datasets["train"] = (train_src, train_tgt)
 
     merged_dataset = sorted([(tgt, idx if key == "test" else -1)
                              for key, (src_data, tgt_data) in datasets.items()

@@ -19,12 +19,12 @@ import cotra
 class Args(Arguments):
     config_file: str = "config/default.yaml"
     run_mode: Choices["train", "valid", "test"] = "train"
-    output_dir: str = "outputs/"
+    output_dir: str = "outputs_new/"
     test_output_file: str = "{split}.hyp.orig"
     load_checkpoint: Switch = False
     checkpoint_path: Optional[str] = None
     pdb: Switch = False
-    n_procs: int = 0
+    n_procs: int = 2
     curriculum: Switch = True
     debug: Switch = False
     force: Switch = False
@@ -71,7 +71,7 @@ def main() -> None:
     print(f"Random seed set to {config['random_seed']}")
 
     output_dir = Path(args.output_dir)
-    if not args.debug and output_dir.exists() and not args.force:
+    if not args.debug and output_dir.exists() and args.run_mode == "train" and not args.force:
         print(colored(f"Output folder '{str(output_dir)}' exists, use --force to overwrite."))
         sys.exit(1)
 
@@ -172,8 +172,8 @@ def main() -> None:
     if args.run_mode == "train":
         if args.load_checkpoint:
             load_path = executor.load(path=args.checkpoint_path, allow_failure=True)
-            if load_path is not None:
-                executor.test(eval_datasets["valid"])
+            # if load_path is not None:
+            #     executor.test(eval_datasets["valid"])
 
         executor.train()
     else:

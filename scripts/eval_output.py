@@ -405,14 +405,23 @@ class CProcessor:
         string_start: Optional[int] = None
         tokens = []
         # Replace `<unk>` with `__unk__` so it can still be part of an identifier.
-        split_code = code.replace("<unk>", "__unk__").split()
+        split_code = code.replace("<unk>", "__unk__").split(" ")
         for idx, token in enumerate(split_code):
+            if token == "":
+                # Safely ignore duplicate spaces:
+                # 1. If it's outside of strings, we don't care;
+                # 2. If it's inside a string, it's preserved when it's joined.
+                continue
             if string_start is not None:
                 if token[-1] == '"' and (len(token) == 1 or token[-2] != '\\'):
                     tokens.append(" ".join(split_code[string_start:(idx + 1)]))
                     string_start = None
-            elif token[0] == '"' and (len(token) == 1 or token[-1] != '"'):
+            elif any(token.startswith(prefix) and (len(token) == len(prefix) or token[-1] != '"')
+                     for prefix in ['"', 'L"', 'u8"', 'u"', 'U"']):
                 string_start = idx
+            elif token == "'" and len(tokens) > 0 and tokens[-1] == "'":
+                # Special case for space character literal.
+                tokens[-1] = "' '"
             else:
                 tokens.append(token)
         if string_start is not None:
@@ -446,8 +455,9 @@ class CProcessor:
         line: Tokens = []
 
         def add_space(left: str, right: str) -> bool:
-            if left in ["(", "!", "~", "[", ".", "->"]: return False
-            if right in [")", ";", ",", "[", "]", ".", "->"]: return False
+            if left in ("(", "!", "~", "[", ".", "->"): return False
+            if right in (")", ";", ",", "[", "]", ".", "->"): return False
+            if left == ")" and right == "(": return False
             if left == "*" == right: return False
             if right == "(" and left.isidentifier() and left not in cls.C_KEYWORDS: return False
             return True
@@ -489,6 +499,7 @@ class HTMLPrinter:
         self.index = 0
         self.export_sections: List[str] = []
 
+        self.var_maps: List[Dict[str, Tuple[str, str]]] = []
         self.names = names
         self.name_ids = OrderedDict((name, Markdown.to_id(name)) for name in names)
 
@@ -552,8 +563,12 @@ class HTMLPrinter:
             tgt_tokens: List[str], tgt_func_sig: CProcessor.FuncSignature,
             hyp_output: Dict[str, 'Evaluator.HypOutput'],
             overlap_scores: Dict[str, float],
+            var_map: Optional[Dict[str, Tuple[str, str]]] = None,
             repo: Optional[str] = None, sha: Optional[str] = None) -> None:
 
+        var_map = var_map or {}
+        var_map = {k: [d, o] for k, (d, o) in var_map.items()}
+        self.var_maps.append(var_map)
         outputs: List[List[str]] = [
             self._generate_code_section("Decompiled (source)", src_tokens, src_func_sig),
             self._generate_code_section("Original (target)", tgt_tokens, tgt_func_sig),
@@ -616,6 +631,12 @@ class HTMLPrinter:
         div.sourceCode > pre > code {
           white-space: pre-wrap;
         }
+        div.sourceCode > pre > code .decompiled-var {
+          text-decoration: underline solid red;
+        }
+        div.sourceCode > pre > code .oracle-var {
+          text-decoration: underline solid green;
+        }
         div.collapse-trigger {
           cursor: pointer;
         }
@@ -635,6 +656,15 @@ class HTMLPrinter:
         table, th, td {
           border: 1px solid black;
         }
+        .hide {
+          display: none !important;
+        }
+        button.varname-button {
+          position: fixed;
+          bottom: 0;
+          right: 0;
+          z-index: 100;
+        }
     """
     SCRIPT = r"""
         function toggle() {
@@ -647,11 +677,44 @@ class HTMLPrinter:
                 elem.setAttribute("collapsed", "");
                 this.setAttribute("collapsed", "");
             }
-
         }
         let elems = document.querySelectorAll("div.collapse-trigger");
         for (let i = 0; i < elems.length; ++i)
             elems[i].onclick = toggle;
+        
+        function initVarNames() {
+            for (let key in var_maps) {
+                let value = var_maps[key];
+                let elem = document.querySelector("div[collapse='example-" + key + "'] > div.sourceCode:first-of-type");
+                let html = elem.innerHTML;
+                for (let var_id in value) {
+                    let var_names = value[var_id];
+                    let decomp_span = "<span class='decompiled-var'>" + var_names[0] + "</span>";
+                    let oracle_span = "<span class='oracle-var hide'>" + var_names[1] + "</span>";
+                    html = html.replace(new RegExp(var_id, 'g'),  decomp_span + oracle_span);
+                }
+                elem.innerHTML = html;
+            }
+        }
+        initVarNames();
+        
+        let currentVarName = "decompiled";
+        
+        function toggleVarNames() {
+            document.querySelectorAll(".decompiled-var").forEach(function(item) {
+                item.classList.toggle("hide");
+            });
+            document.querySelectorAll(".oracle-var").forEach(function(item) {
+                item.classList.toggle("hide");
+            });
+            if (currentVarName === "decompiled") {
+                currentVarName = "oracle";
+                document.querySelector(".varname-button").innerText = "Switch to Decompiled var names";
+            } else {
+                currentVarName = "decompiled";
+                document.querySelector(".varname-button").innerText = "Switch to Oracle var names";
+            }
+        }
     """
 
     def generate(self, stats: Mapping[str, Stats], summary_table: Markdown.Table,
@@ -675,7 +738,11 @@ class HTMLPrinter:
             <input id="goto-id" placeholder="Enter Example ID...">
             <button onclick="window.location.hash='example-'+document.getElementById('goto-id').value">
               Go!
-            </button>"""
+            </button>
+            <button class="varname-button" onclick="toggleVarNames()">
+              Switch to Oracle var names
+            </button>
+            """,
         ]
         # List of IDs for deteriorated examples
         sections += ["## Lists of Deteriorated Examples"]
@@ -691,6 +758,13 @@ class HTMLPrinter:
         sections += [
             "## Examples",
             *self.export_sections,
+        ]
+        # JavaScript for storing variable names
+        sections += [
+            r'<script type="text/javascript">' + "\n".join([
+                "let var_maps = {};",
+                *[rf'var_maps[{idx}] = {var_map!r}' for idx, var_map in enumerate(self.var_maps)],
+            ]) + r'</script>',
         ]
         # JavaScript for collapsing sections
         sections += [
@@ -836,8 +910,14 @@ class Evaluator:
         return 1 if x > 0 else -1 if x < 0 else 0
 
     def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_scores: Dict[str, float],
+            var_map: Optional[Dict[str, Tuple[str, str]]] = None,
             repo: Optional[str] = None, sha: Optional[str] = None) -> None:
-        src_tokens, src_func_sig, src_parsable = self._parse_raw_code(src)
+        var_map = var_map or {}
+        var_replaced_src = src
+        for key, (_, oracle) in var_map.items():
+            var_replaced_src = var_replaced_src.replace(key, oracle)
+        src_tokens, src_func_sig, src_parsable = self._parse_raw_code(var_replaced_src)
+        raw_src_tokens, _, _ = self._parse_raw_code(src)
         tgt_tokens, tgt_func_sig, _ = self._parse_raw_code(tgt)
         self.references.append(tgt_tokens)
 
@@ -881,7 +961,8 @@ class Evaluator:
 
         if self.html_printer is not None:
             self.html_printer.add_example(
-                src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_scores, repo, sha)
+                raw_src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_scores,
+                var_map, repo, sha)
 
         self.index += 1
 
@@ -958,7 +1039,7 @@ class InputData(NamedTuple):
     tgt_data: List[str]
     hyp_data: Dict[str, List[str]]
     overlap_scores: Dict[str, List[float]]
-    additional_data: List[Tuple[str, str, str]]  # (score, repo, sha)
+    additional_data: List[Tuple[str, str, str, str]]  # (var_map, score, repo, sha)
 
 
 def main():
@@ -972,11 +1053,15 @@ def main():
     for file_name, max_size in [("eval-small.html", 100), ("eval.html", len(data.src_data))]:
         evaluator = Evaluator(data.names, export=os.path.join(args.output_dir, file_name))
         for idx in trange(max_size):
+            var_names, score, repo, sha = data.additional_data[idx]
+            var_map = {}
+            if var_names != "":
+                var_map = {name: (decomp, oracle) for name, decomp, oracle in flutes.chunk(3, var_names.split("\0"))}
             evaluator.add(src=data.src_data[idx],
                           tgt=data.tgt_data[idx],
                           hyps={name: data.hyp_data[name][idx] for name in data.names},
                           overlap_scores={name: data.overlap_scores[name][idx] for name in data.names},
-                          repo=data.additional_data[idx][1], sha=data.additional_data[idx][2])
+                          var_map=var_map, repo=repo, sha=sha)
         evaluator.print_summary()
 
 

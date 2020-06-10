@@ -16,7 +16,7 @@ from cotra.utils.metric import DecodeMixin
 class Args(Arguments):
     data_file: str = "data/processed/test.txt"  # original dataset
     hyp_names: str  # comma separated
-    hyp_files: str = "outputs/test_repos_included.hyp.760k"  # hypotheses, comma separated
+    hyp_files: str  # hypotheses, comma separated
     overlap_score_files: str = "data/processed/overlap_test.txt"  # overlap scores for test set, comma separated
     output_file: str = "outputs/test.annotated"
     pickle_file: str = "outputs/test_output.pkl"
@@ -58,14 +58,20 @@ def read_pairs(path, decode=False, tuple_separator="\1", token_separator="\0",
     additional_data = []
     for line in read_lines(path, verbose=verbose):
         example = line.split(tuple_separator)
-        src, tgt, *additional = example
-        if not _filter_fn(src, tgt):
-            continue
+        src, *_tgt, var_map, score, repo, sha  = example
+        additional = var_map, score, repo, sha
+        # DO NOT FILTER!
+        # if not _filter_fn(src, tgt):
+        #     continue
+        tgt = tuple_separator.join(_tgt) if len(_tgt) != 1 else _tgt[0]
         if return_additional_data:
             additional_data.append(additional)
         if decode:
             src = " ".join(DecodeMixin.spm_decode(src.split(token_separator)))
             tgt = " ".join(DecodeMixin.spm_decode(tgt.split(token_separator)))
+        else:
+            src = " ".join(src.split(token_separator))
+            tgt = " ".join(tgt.split(token_separator))
         src_data.append(src)
         tgt_data.append(tgt)
     if return_additional_data:
@@ -158,7 +164,7 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
 def main():
     args = Args()
     flutes.register_ipython_excepthook()
-    src_data, tgt_data, additional_data = read_pairs(args.data_file, decode=True, return_additional_data=True)
+    src_data, tgt_data, additional_data = read_pairs(args.data_file, return_additional_data=True)
     names = args.hyp_names.split(",")
     hyp_paths = args.hyp_files.split(",")
     assert len(names) == len(hyp_paths)

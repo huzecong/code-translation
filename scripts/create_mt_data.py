@@ -16,8 +16,8 @@ from argtyped import Switch
 
 
 class Arguments(argtyped.Arguments):
-    input_dir: str = "match_output/"
-    output_dir: str = "mt_data/"
+    input_dir: str = "match_output_varnames/"
+    output_dir: str = "mt_data_varnames/"
     max_repos: Optional[int]
     quiet: Switch = False
     n_procs: int = 4
@@ -148,8 +148,8 @@ def main():
                 n_examples += 1
             else:
                 n_duplicate += 1
-            progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
             if (n_examples + n_duplicate) % 100 == 0:
+                progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
                 progress.refresh()
             if len(text_data) >= args.block_size:
                 save_file()

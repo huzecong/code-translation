@@ -46,8 +46,6 @@ class InputData(NamedTuple):
     sha: str
 
 
-
-
 def read_data(data_dir: str) -> Iterator[InputData]:
     files = [file for file in sorted(Path(data_dir).iterdir())
              if file.name.startswith("data_") and file.suffix == ".pkl"]
