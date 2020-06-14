@@ -1,17 +1,20 @@
 import itertools
+import json
 import os
 import pickle
 import string
 from collections import Counter, OrderedDict, defaultdict
-from typing import Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Tuple, TypeVar, Set
 
 import flutes
 import numpy as np
 import texar.torch as tx
 from argtyped import Arguments
-from mypy_extensions import TypedDict
 from termcolor import colored
 from tqdm import trange
+from typing_extensions import TypedDict
+
+from cotra.parse import LexToken, Lexer
 
 
 class Args(Arguments):
@@ -251,6 +254,8 @@ class Stats:
         self.arg_missing = Frac()  # missing arguments
         self.redundant_args = 0  # extra/duplicate arguments
         self.pointer = ConfusionMat()  # correct type changes from non-pointer to pointer
+        self.missing_strings = 0
+        self.redundant_strings = 0
 
         self.improving = CategoryCounter()  # examples that improved compared to
         self.arg_name_kind = CategoryCounter()
@@ -399,35 +404,19 @@ class CProcessor:
             ret_type = cls.TypeSignature(["void"], 0)  # default return type is void
         return cls.FuncSignature(ret_type, func_name, args)
 
+    lexer = Lexer()
+
     @classmethod
     def tokenize(cls, code: str, syntax_correct: bool = True) -> List[str]:
-        # Split code considering string literals.
-        string_start: Optional[int] = None
-        tokens = []
         # Replace `<unk>` with `__unk__` so it can still be part of an identifier.
-        split_code = code.replace("<unk>", "__unk__").split(" ")
-        for idx, token in enumerate(split_code):
-            if token == "":
-                # Safely ignore duplicate spaces:
-                # 1. If it's outside of strings, we don't care;
-                # 2. If it's inside a string, it's preserved when it's joined.
-                continue
-            if string_start is not None:
-                if token[-1] == '"' and (len(token) == 1 or token[-2] != '\\'):
-                    tokens.append(" ".join(split_code[string_start:(idx + 1)]))
-                    string_start = None
-            elif any(token.startswith(prefix) and (len(token) == len(prefix) or token[-1] != '"')
-                     for prefix in ['"', 'L"', 'u8"', 'u"', 'U"']):
-                string_start = idx
-            elif token == "'" and len(tokens) > 0 and tokens[-1] == "'":
-                # Special case for space character literal.
-                tokens[-1] = "' '"
-            else:
-                tokens.append(token)
-        if string_start is not None:
-            assert not syntax_correct
-            tokens.append(" ".join(split_code[string_start:]))
-        return tokens
+        code = code.replace("<unk>", "__unk__")
+        return cls.lexer.lex(code)
+
+    @classmethod
+    def get_token_types(cls, code: str) -> List[LexToken]:
+        # Replace `<unk>` with `__unk__` so it can still be part of an identifier.
+        code = code.replace("<unk>", "__unk__")
+        return list(cls.lexer.lex_tokens(code))
 
     @classmethod
     def is_same_type(cls, a: TypeSignature, b: TypeSignature,
@@ -493,15 +482,32 @@ class CProcessor:
         return "\n".join(lines)
 
 
-class HTMLPrinter:
+class BaseExporter:
     def __init__(self, path: str, names: List[str]):
         self.export_path = path
         self.index = 0
-        self.export_sections: List[str] = []
-
-        self.var_maps: List[Dict[str, Tuple[str, str]]] = []
         self.names = names
         self.name_ids = OrderedDict((name, Markdown.to_id(name)) for name in names)
+
+    def add_example(
+            self,
+            src_tokens: List[str], src_func_sig: CProcessor.FuncSignature,
+            tgt_tokens: List[str], tgt_func_sig: CProcessor.FuncSignature,
+            hyp_output: Dict[str, 'Evaluator.HypOutput'],
+            var_map: Optional[Dict[str, Tuple[str, str]]] = None,
+            repo: Optional[str] = None, sha: Optional[str] = None) -> None:
+        raise NotImplementedError
+
+    def generate(self, stats: Mapping[str, Stats], summary_table: Markdown.Table,
+                 improvement_tables: Mapping[str, Markdown.Table]):
+        raise NotImplementedError
+
+
+class HTMLExporter(BaseExporter):
+    def __init__(self, path: str, names: List[str]):
+        super().__init__(path, names)
+        self.export_sections: List[str] = []
+        self.var_maps: List[Dict[str, Tuple[str, str]]] = []
 
     @classmethod
     def _generate_code_section(cls, name: str, code: List[str], sig: CProcessor.FuncSignature,
@@ -562,7 +568,6 @@ class HTMLPrinter:
             src_tokens: List[str], src_func_sig: CProcessor.FuncSignature,
             tgt_tokens: List[str], tgt_func_sig: CProcessor.FuncSignature,
             hyp_output: Dict[str, 'Evaluator.HypOutput'],
-            overlap_scores: Dict[str, float],
             var_map: Optional[Dict[str, Tuple[str, str]]] = None,
             repo: Optional[str] = None, sha: Optional[str] = None) -> None:
 
@@ -583,11 +588,11 @@ class HTMLPrinter:
             ])
 
         for name, hyp in hyp_output.items():
-            bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=4, smooth=True)
-            bleu8 = tx.evals.sentence_bleu([tgt_tokens], hyp.tokens, max_order=8, smooth=True)
             improvements = [key for key, diff in hyp.scores_diff.items() if diff > 0]
             deteriorates = [key for key, diff in hyp.scores_diff.items() if diff < 0]
-            score = overlap_scores[name]
+            bleu4 = hyp.metrics['bleu4']
+            bleu8 = hyp.metrics['bleu8']
+            score = hyp.metrics['overlap_score']
             additional_evals = [
                 f"BLEU4 = {bleu4:.2f}, BLEU8 = {bleu8:.2f}",
                 f"Similarity Score: " + (f'<div class="highlight">{score:.3f}</div>'
@@ -782,21 +787,111 @@ class HTMLPrinter:
         print(colored(f"Generated output at {self.export_path}", "green"))
 
 
+JSON = Dict[str, Any]
+
+
+class JSONExporter(BaseExporter):
+    def __init__(self, path: str, names: List[str]):
+        super().__init__(path, names)
+        self.examples: List[JSON] = []
+
+    @classmethod
+    def _generate_code_section(cls, code: List[str], sig: CProcessor.FuncSignature) -> JSON:
+        return {
+            "code": CProcessor.prettify(code),
+            "func_name": sig.name,
+            "ret_type": " ".join(sig.ret_type.type),
+            "args": [(name, " ".join(typ.type)) for typ, name in sig.args],
+        }
+
+    @classmethod
+    def _generate_arg_comparison(cls, sig: CProcessor.FuncSignature, is_correct: 'Evaluator.EvalOutput') -> JSON:
+        arg_list: List[Tuple[str, str, Optional[bool]]] = []
+        redundant = is_correct.redundant_args.copy()
+        for arg_typ, arg_name in reversed(sig.args):
+            # Go in reverse order so we mark later occurrences of the same variable as redundant.
+            if arg_name in redundant:
+                verdict = None  # redundant
+                redundant.remove(arg_name)
+            else:
+                verdict = is_correct.arg_types[arg_name]
+            arg_list.append((arg_name, " ".join(arg_typ.type), verdict))
+        arg_list = list(reversed(arg_list))
+        missing = [k for k, v in is_correct.missing_args.items() if v]
+        return {
+            "args": arg_list,
+            "missing_args": missing,
+        }
+
+    def add_example(
+            self,
+            src_tokens: List[str], src_func_sig: CProcessor.FuncSignature,
+            tgt_tokens: List[str], tgt_func_sig: CProcessor.FuncSignature,
+            hyp_output: Dict[str, 'Evaluator.HypOutput'],
+            var_map: Optional[Dict[str, Tuple[str, str]]] = None,
+            repo: Optional[str] = None, sha: Optional[str] = None) -> None:
+        var_map = var_map or {}
+        json_dict = {
+            "index": self.index,
+            "meta_data": {
+                "repo": repo,
+                "sha": sha,
+            },
+            "var_map": var_map,
+            "src": self._generate_code_section(src_tokens, src_func_sig),
+            "tgt": self._generate_code_section(tgt_tokens, tgt_func_sig),
+            "preds": []
+        }
+
+        for name, hyp in hyp_output.items():
+            # improvements = [key for key, diff in hyp.scores_diff.items() if diff > 0]
+            # deteriorates = [key for key, diff in hyp.scores_diff.items() if diff < 0]
+            # for list_name, items in [("Improvements", improvements), ("Deteriorations", deteriorates)]:
+            #     tag = Markdown.underline(f"{list_name} w.r.t Decompiled Code:")
+            #     items = [Markdown.link(Stats.KEY_DESCRIPTION[key], "#" + self._get_list_id(key, name)) for key in items]
+            #     list_str = "; ".join(items) if len(items) > 0 else "(None)"
+            #     additional_evals.append(tag + " " + list_str)
+            pred_dict = {
+                "source": name,
+                **self._generate_code_section(hyp.tokens, hyp.func_sig),
+                **self._generate_arg_comparison(hyp.func_sig, hyp.is_correct),
+                **hyp.metrics,
+                "missing_strings": list(hyp.missing_strings),
+                "redundant_strings": list(hyp.redundant_strings),
+            }
+            json_dict["preds"].append(pred_dict)
+
+        self.examples.append(json_dict)
+        self.index += 1
+
+    def generate(self, stats: Mapping[str, Stats], summary_table: Markdown.Table,
+                 improvement_tables: Mapping[str, Markdown.Table]):
+        json_dict = {
+            "summary": {
+                "summary_table": summary_table.table,
+                "improvement_tables": [(name, improvement_tables[name].table) for name in self.names],
+            },
+            "examples": self.examples,
+        }
+        with open(self.export_path, "w") as f:
+            json.dump(json_dict, f)
+
+
 class Evaluator:
     DECOMPILED_NAME = "Decompiled"
 
-    def __init__(self, names: List[str], export: Optional[str] = None):
+    def __init__(self, names: List[str], exporter: Optional[BaseExporter] = None):
         self.stats = OrderedDict((name, Stats()) for name in [self.DECOMPILED_NAME] + names)
         self.names = names
         self.name_ids = OrderedDict((name, Markdown.to_id(name)) for name in names)
 
         self.references: List[Tokens] = []
+        self.references_no_var: List[Tokens] = []
         self.hypotheses: Dict[str, List[Tokens]] = {name: [] for name in [self.DECOMPILED_NAME] + names}
+        self.hypotheses_no_var = {name: [] for name in self.hypotheses.keys()}
 
-        self.html_printer = None
         self.index = 0
-        if export is not None:
-            self.html_printer = HTMLPrinter(export, names)
+        self.exporter = exporter
 
     class EvalOutput(NamedTuple):
         func_name: bool  # is_correct
@@ -877,7 +972,7 @@ class Evaluator:
                 g, p = eval_output.pointer_conversion[x]
                 if p:
                     pointer_score += _(g)
-        return self.EvalScore({
+        return {
             "func_name": _(eval_output.func_name),
             "ret_type": _(eval_output.ret_type),
             "ret_type_strict": _(eval_output.ret_type_strict),
@@ -885,13 +980,22 @@ class Evaluator:
             "arg_type": arg_type_score,
             "arg_type_strict": arg_type_strict_score,
             "pointer_conversion": pointer_score,
-        })
+        }
+
+    class MetricDict(TypedDict):
+        bleu4: float
+        bleu8: float
+        overlap_score: float
+        bleu4_no_var: float
 
     class HypOutput(NamedTuple):
         tokens: List[str]
         func_sig: CProcessor.FuncSignature
         is_correct: 'Evaluator.EvalOutput'
         scores_diff: Dict[str, int]
+        missing_strings: Set[str]
+        redundant_strings: Set[str]
+        metrics: 'Evaluator.MetricDict'
 
     def _parse_raw_code(self, code: str, syntax_correct: bool = True) \
             -> Tuple[List[str], CProcessor.FuncSignature, bool]:
@@ -909,6 +1013,15 @@ class Evaluator:
     def _sign(x: int) -> int:
         return 1 if x > 0 else -1 if x < 0 else 0
 
+    @staticmethod
+    def _analyze_code(code: str) -> Tuple[List[str], Set[str]]:
+        # ([token_no_var], {string_literals})
+        # Tokenize code and replace all identifiers with a dummy token.
+        tokens = CProcessor.get_token_types(code)
+        tokens_no_var = [token.value if token.type != "ID" else "_VAR_" for token in tokens]
+        string_literals = {token.value for token in tokens if token.type in {'STRING_LITERAL', 'WSTRING_LITERAL'}}
+        return tokens_no_var, string_literals
+
     def add(self, src: str, tgt: str, hyps: Dict[str, str], overlap_scores: Dict[str, float],
             var_map: Optional[Dict[str, Tuple[str, str]]] = None,
             repo: Optional[str] = None, sha: Optional[str] = None) -> None:
@@ -920,6 +1033,11 @@ class Evaluator:
         raw_src_tokens, _, _ = self._parse_raw_code(src)
         tgt_tokens, tgt_func_sig, _ = self._parse_raw_code(tgt)
         self.references.append(tgt_tokens)
+        src_tokens_no_var, src_string_literals = self._analyze_code(src)
+        tgt_tokens_no_var, tgt_string_literals = self._analyze_code(tgt)
+        self.references_no_var.append(tgt_tokens_no_var)
+        # string_literals = src_string_literals & tgt_string_literals
+        string_literals = tgt_string_literals
 
         is_correct_src = self._evaluate_signatures(src_func_sig, tgt_func_sig, src_func_sig)
         scores_src = self._get_score(is_correct_src)
@@ -929,7 +1047,17 @@ class Evaluator:
             if name != self.DECOMPILED_NAME:
                 hyp = hyps[name]
                 hyp_tokens, hyp_func_sig, parsable = self._parse_raw_code(hyp, syntax_correct=False)
+                hyp_tokens_no_var, hyp_string_literals = self._analyze_code(hyp)
+            else:
+                hyp_tokens, hyp_func_sig, parsable = src_tokens, src_func_sig, src_parsable
+                hyp_tokens_no_var = src_tokens_no_var
+                hyp_string_literals = src_string_literals
+                is_correct_hyp = is_correct_src
 
+            missing_strings = string_literals - hyp_string_literals
+            redundant_strings = hyp_string_literals - string_literals
+
+            if name != self.DECOMPILED_NAME:
                 if not parsable:
                     stats.deteriorated_examples["unparsable"].append(self.index)
                 is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig, stats)
@@ -941,12 +1069,23 @@ class Evaluator:
                     if diff == -1:
                         stats.deteriorated_examples[key].append(self.index)
 
-                hyp_outputs[name] = self.HypOutput(hyp_tokens, hyp_func_sig, is_correct_hyp, scores_diff)
-            else:
-                hyp_tokens, hyp_func_sig, parsable = src_tokens, src_func_sig, src_parsable
-                is_correct_hyp = is_correct_src
+                bleu4 = tx.evals.sentence_bleu([tgt_tokens], hyp_tokens, max_order=4, smooth=True)
+                bleu8 = tx.evals.sentence_bleu([tgt_tokens], hyp_tokens, max_order=8, smooth=True)
+                bleu4_no_var = tx.evals.sentence_bleu([tgt_tokens_no_var], hyp_tokens_no_var, max_order=4, smooth=True)
+                metrics: 'Evaluator.MetricDict' = {
+                    "bleu4": bleu4,
+                    "bleu8": bleu8,
+                    "overlap_score": overlap_scores[name],
+                    "bleu4_no_var": bleu4_no_var,
+                }
+            # else:
+            #     metrics = {}
+                hyp_outputs[name] = self.HypOutput(
+                    hyp_tokens, hyp_func_sig, is_correct_hyp, scores_diff,
+                    missing_strings, redundant_strings, metrics)
 
             self.hypotheses[name].append(hyp_tokens)
+            self.hypotheses_no_var[name].append(hyp_tokens_no_var)
             stats.unparsable.add([not parsable])
             stats.fn_name.add([is_correct_hyp.func_name])
             stats.fn_ret_type.add([is_correct_hyp.ret_type])
@@ -956,12 +1095,14 @@ class Evaluator:
             stats.arg_type.add(is_correct_hyp.arg_types.values())
             stats.arg_type_strict.add(is_correct_hyp.arg_types_strict.values())
             stats.redundant_args += len(is_correct_hyp.redundant_args)
+            stats.missing_strings += len(missing_strings)
+            stats.redundant_strings += len(redundant_strings)
             for g, p in is_correct_hyp.pointer_conversion.values():
                 stats.pointer.add(gold=[g], pred=[p])
 
-        if self.html_printer is not None:
-            self.html_printer.add_example(
-                raw_src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs, overlap_scores,
+        if self.exporter is not None:
+            self.exporter.add_example(
+                raw_src_tokens, src_func_sig, tgt_tokens, tgt_func_sig, hyp_outputs,
                 var_map, repo, sha)
 
         self.index += 1
@@ -971,6 +1112,7 @@ class Evaluator:
             ("Metric", None),
             ("BLEU4", "green"),
             ("BLEU8", "green"),
+            ("BLEU4 (ignoring identifiers)", "green"),
             ("Unparsable function signature", "red"),
             ("Correct func names", "green"),
             ("Correct return types (ignoring CV)", "green"),
@@ -980,24 +1122,35 @@ class Evaluator:
             ("Correct argument types (strict)", "green"),
             ("Missing arguments", "red"),
             ("Redundant arguments", "red"),
+            ("Missing string literals", "red"),
+            ("Redundant string literals", "red"),
             ("Pointer conversion", "green"),
         ]
         references = [[tgt] for tgt in self.references]
-        summary_table_cols: List[List[str]] = [[
-            name,
-            f"{tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=4):.2f}",  # type: ignore[arg-type]
-            f"{tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=8):.2f}",  # type: ignore[arg-type]
-            str(stats.unparsable),
-            str(stats.fn_name),
-            str(stats.fn_ret_type),
-            str(stats.fn_ret_type_strict),
-            str(stats.arg_name),
-            str(stats.arg_type),
-            str(stats.arg_type_strict),
-            str(stats.arg_missing),
-            str(stats.redundant_args),
-            f"P: {stats.pointer.precision}, R: {stats.pointer.recall}",
-        ] for name, stats in self.stats.items()]
+        references_no_var = [[tgt] for tgt in self.references_no_var]
+        summary_table_cols: List[List[str]] = []
+        for name, stats in self.stats.items():
+            bleu4 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=4)
+            bleu4_no_var = tx.evals.corpus_bleu(references_no_var, self.hypotheses_no_var[name], max_order=4)
+            bleu8 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=8)
+            summary_table_cols.append([
+                name,
+                f"{bleu4:.2f}",
+                f"{bleu8:.2f}",
+                f"{bleu4_no_var:.2f}",
+                str(stats.unparsable),
+                str(stats.fn_name),
+                str(stats.fn_ret_type),
+                str(stats.fn_ret_type_strict),
+                str(stats.arg_name),
+                str(stats.arg_type),
+                str(stats.arg_type_strict),
+                str(stats.arg_missing),
+                str(stats.redundant_args),
+                str(stats.missing_strings),
+                str(stats.redundant_strings),
+                f"P: {stats.pointer.precision}, R: {stats.pointer.recall}",
+            ])
         summary_table_items: List[List[str]] = list(
             map(list, zip(*([[name for name, _ in summary_table_col_headers]] + summary_table_cols))))  # transpose
         summary_table = Markdown.Table(summary_table_items, ["left"] + ["right"] * len(summary_table_cols))
@@ -1029,8 +1182,8 @@ class Evaluator:
             print(colored("  Arg type categories:", "yellow"))
             print(Markdown.indent(stats.arg_type_kind.to_string(lambda xs: xs[1]), indent=4))
 
-        if self.html_printer is not None:
-            self.html_printer.generate(self.stats, summary_table, improvement_tables)
+        if self.exporter is not None:
+            self.exporter.generate(self.stats, summary_table, improvement_tables)
 
 
 class InputData(NamedTuple):
@@ -1050,8 +1203,10 @@ def main():
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
-    for file_name, max_size in [("eval-small.html", 100), ("eval.html", len(data.src_data))]:
-        evaluator = Evaluator(data.names, export=os.path.join(args.output_dir, file_name))
+    for file_name, max_size in [("eval-small", 100), ("eval", len(data.src_data))]:
+        # exporter = HTMLExporter(os.path.join(args.output_dir, file_name + ".html"), data.names)
+        exporter = JSONExporter(os.path.join(args.output_dir, file_name + ".json"), data.names)
+        evaluator = Evaluator(data.names, exporter=exporter)
         for idx in trange(max_size):
             var_names, score, repo, sha = data.additional_data[idx]
             var_map = {}

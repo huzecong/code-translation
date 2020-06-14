@@ -1,0 +1,60 @@
+/* app css stylesheet */
+.negative {
+    color: red;
+}
+
+.positive {
+    color: green;
+}
+
+div.container.top-margin {
+    height: 46px;
+}
+
+div.main {
+    height: calc(100vh - 46px);
+    overflow-x: hidden;
+    overflow-y: scroll;
+    padding-top: 20px;
+}
+
+@media screen and (max-width: 767px) {
+    div.main > .container {
+        max-width: calc(100vw - 150px) !important;
+    }
+}
+
+@media screen and (min-width: 768px) {
+    div.main > .container {
+        max-width: calc(100vw - 300px) !important;
+    }
+}
+
+
+#example {
+    overflow-wrap: break-word;
+}
+
+#example .input {
+    width: 5em !important;
+    display: block;
+    margin: 0 auto 0.5rem !important;
+    text-align: center;
+}
+
+#example .checkbox {
+    display: block;
+    margin: 0 auto 0.5rem !important;
+}
+
+#example #src-code code .decompiled-var {
+    text-decoration: underline solid red;
+}
+
+#example #src-code code .oracle-var {
+    text-decoration: underline solid green;
+}
+
+.hide {
+    display: none !important;
+}

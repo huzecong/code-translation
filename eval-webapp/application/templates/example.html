@@ -1,0 +1,134 @@
+<div id="example" class="ui vertical segment" ng-controller="ExampleCtrl">
+    <h2 class="ui dividing header">Examples</h2>
+
+    <div class="ui right close rail">
+        <div class="ui sticky">
+            <div class="ui labeled icon vertical menu">
+                <a class="item" ng-class="{disabled: idx >= exampleCount}"
+                   ng-click="idx < exampleCount && switchExample(idx + 1)">
+                    <i class="chevron up icon"></i>
+                    Next
+                </a>
+                <div class="item">
+                    <div class="ui input" ng-class="{error: gotoInputError}">
+                        <input type="number" id="goto-example" placeholder="ID" min="1" max="{{exampleCount}}"
+                               ng-model="gotoExampleIdx" ng-change="updateGoto()">
+                    </div>
+                    Goto
+                </div>
+                <a class="item" ng-class="{disabled: idx <= 1}"
+                   ng-click="idx > 1 && switchExample(idx - 1)">
+                    <i class="chevron down icon"></i>
+                    Previous
+                </a>
+                <div class="item">
+                    <div class="ui fitted toggle checkbox">
+                        <input type="checkbox" ng-model="showOracleVar" ng-change="updateVarName()">
+                        <label></label>
+                    </div>
+                    Oracle Var
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h3 class="ui header">Example {{idx}} / {{exampleCount}}</h3>
+
+    <div class="ui styled fluid accordion">
+        <div class="active title">
+            <i class="dropdown icon"></i>
+            Metadata
+        </div>
+        <div class="active content" ng-init="meta = example.meta_data">
+            <ul>
+                <li>Repository: <a href="https://github.com/{{meta.repo}}">{{meta.repo}}</a>
+                </li>
+                <li>Binary Hash: {{meta.sha}}</li>
+            </ul>
+        </div>
+
+        <div class="active title">
+            <i class="dropdown icon"></i>
+            Metric Summary
+        </div>
+        <div class="active content" ng-init="meta = example.meta_data">
+            <ng-metric-table values="metricValues" metrics="metricDescriptions" names="predNames"></ng-metric-table>
+        </div>
+
+        <div class="active title" ng-repeat-start="set in srcTgt">
+            <i class="dropdown icon"></i>
+            {{set[1]}}
+        </div>
+        <div class="active content" ng-repeat-end ng-init="data = set[2]">
+            <pre id="{{set[0]}}-code"><code class="language-c">{{data.code}}</code></pre>
+            <ul>
+                <li>Function name: <code>{{data.func_name}}</code></li>
+                <li>Return type: <code>{{data.ret_type}}</code></li>
+                <li>Arguments:
+                    <ul>
+                        <li ng-repeat="arg in example.src.args"><code>{{arg[0]}}</code>: <code>{{arg[1]}}</code></li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+
+        <div class="active title" ng-repeat-start="data in example.preds" ng-init="predIdx = $index">
+            <i class="dropdown icon"></i>
+            {{data['source']}}
+        </div>
+        <div class="active content" ng-init="tgt = example.tgt" ng-repeat-end>
+            <pre><code class="language-c">{{data.code}}</code></pre>
+            <ul>
+                <li>Function name:
+                    <ng-check pred="data.func_name" label="tgt.func_name"/>
+                </li>
+                <li>Return type:
+                    <ng-check pred="data.ret_type" label="tgt.ret_type"/>
+                </li>
+                <li>Arguments:
+                    <ul>
+                        <li ng-repeat="arg in data.args">
+                            <ng-check cond="arg[2]" pred="arg[0]">
+                                <span ng-if="arg[2] === null">(redundant)</span>
+                            </ng-check>
+                            : <code>{{arg[1]}}</code>
+                        </li>
+                        <li ng-if="data.missing_args && data.missing_args.length > 0">
+                            <u>Missing:</u>
+                            <span class="highlight" ng-repeat-start="arg in data.missing_args">{{arg}}</span>
+                            <span ng-repeat-end ng-if="!$last">, </span>
+                        </li>
+                    </ul>
+                </li>
+                <li ng-if="data.missing_strings.length > 0">Missing string literals:
+                    <ul>
+                        <li ng-repeat="str in data.missing_strings"><code class="negative">{{str}}</code></li>
+                    </ul>
+                </li>
+                <li ng-if="data.redundant_strings.length > 0">Redundant string literals:
+                    <ul>
+                        <li ng-repeat="str in data.redundant_strings"><code class="negative">{{str}}</code></li>
+                    </ul>
+                </li>
+                <li>Metrics:
+                    <ul>
+                        <li ng-repeat="metric in metricDescriptions" ng-init="value = metricValues[$index][predIdx]">
+                            {{metric.name}}: {{metric.formatter ? metric.formatter(value) : value}}
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+<script type="text/javascript">
+    $(".ui.sticky").sticky({
+        offset: 200,
+        observeChanges: true,
+        context: "#example",
+        scrollContext: ".main",
+    });
+    $('.ui.accordion').accordion({
+        exclusive: false,
+    });
+</script>

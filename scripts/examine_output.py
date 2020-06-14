@@ -15,18 +15,17 @@ from cotra.utils.metric import DecodeMixin
 
 class Args(Arguments):
     data_file: str = "data/processed/test.txt"  # original dataset
-    hyp_names: str  # comma separated
-    hyp_files: str  # hypotheses, comma separated
+    # hyp_names: str  # comma separated
+    # hyp_files: str  # hypotheses, comma separated
     overlap_score_files: str = "data/processed/overlap_test.txt"  # overlap scores for test set, comma separated
-    output_file: str = "outputs/test.annotated"
-    pickle_file: str = "outputs/test_output.pkl"
+    pickle_file: str = "test_output.pkl"
 
 
-def read_lines(path: str, verbose: bool = True) -> Iterator[str]:
+def read_lines(path: str, verbose: bool = True, skip_empty: bool = True) -> Iterator[str]:
     with flutes.progress_open(path, verbose=verbose) as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if skip_empty and not line: continue
             yield line
 
 
@@ -58,7 +57,7 @@ def read_pairs(path, decode=False, tuple_separator="\1", token_separator="\0",
     additional_data = []
     for line in read_lines(path, verbose=verbose):
         example = line.split(tuple_separator)
-        src, *_tgt, var_map, score, repo, sha  = example
+        src, *_tgt, var_map, score, repo, sha = example
         additional = var_map, score, repo, sha
         # DO NOT FILTER!
         # if not _filter_fn(src, tgt):
@@ -165,13 +164,39 @@ def main():
     args = Args()
     flutes.register_ipython_excepthook()
     src_data, tgt_data, additional_data = read_pairs(args.data_file, return_additional_data=True)
-    names = args.hyp_names.split(",")
-    hyp_paths = args.hyp_files.split(",")
+    # names = args.hyp_names.split(",")
+    # hyp_paths = args.hyp_files.split(",")
+    # overlap_paths = args.overlap_score_files.split(",")
+    names = [
+        "Seq2seq-D",
+        "Seq2seq-O",
+        "Seq2seq-D+Finetune",
+        "Seq2seq-O+Finetune",
+        "TranX-O-Greedy",
+        "TranX-O-Beam5",
+    ]
+    tranx_model_name = ("model.sup.c.var_original.hidden256.embed128.action128.field64.type64.dropout0.3.lr0.001."
+                        "lr_decay0.5.beam_size15.vocab.pkl.tranx_data.seed19260817.bin")
+    hyp_paths = [
+        "outputs_decomp_varname/test_default.hyp.orig",
+        "outputs_orig_varname/test_default.hyp.orig",
+        "outputs_decomp_varname_finetune/test_default.hyp.orig",
+        "outputs_orig_varname_finetune/test_default.hyp.orig",
+        f"../tranX/decodes/c/{tranx_model_name}.test.beam_size1.max_time1000.decode.txt",
+        f"../tranX/decodes/c/{tranx_model_name}.test.beam_size5.max_time1000.decode.txt",
+    ]
+    overlap_paths = [
+        "data/processed/overlap_test.txt",
+        "data/processed/overlap_test.txt",
+        "data/processed/overlap_extra_test.txt",
+        "data/processed/overlap_extra_test.txt",
+        "data/processed/overlap_test.txt",
+        "data/processed/overlap_test.txt",
+    ]
     assert len(names) == len(hyp_paths)
     hyp_data = {}
     for name, hyp_path in zip(names, hyp_paths):
-        hyp_data[name] = list(read_lines(hyp_path, verbose=False))
-    overlap_paths = args.overlap_score_files.split(",")
+        hyp_data[name] = list(read_lines(hyp_path, verbose=False, skip_empty=False))
     if len(overlap_paths) == 1:
         overlap_paths = overlap_paths * len(names)
     assert len(overlap_paths) == len(names)

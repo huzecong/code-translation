@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en" ng-app="App">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Code Translation Evaluation</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="icon" type="image/png" href="/favicon"/>
+
+    <link rel="stylesheet" href="/static/app.css?version={- static_version -}">
+    {% if debug %}
+    <link rel="stylesheet" href="/static/lib/html5-boilerplate/dist/css/normalize.css">
+    <link rel="stylesheet" href="/static/lib/html5-boilerplate/dist/css/main.css">
+    <script src="/static/lib/html5-boilerplate/dist/js/vendor/modernizr-2.8.3.min.js"></script>
+    <link rel="stylesheet" href="/static/lib/semantic-ui/dist/semantic.css">
+    <link rel="stylesheet" href="/static/lib/prismjs/themes/prism.css">
+    {% else %}
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/html5-boilerplate@6.1.0/dist/css/main.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/html5-boilerplate@6.1.0/dist/css/normalize.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/html5-boilerplate@6.1.0/dist/js/vendor/modernizr-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/semantic-ui@2.4.2/dist/semantic.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.20.0/themes/prism.min.css">
+    {% endif %}
+    <!--<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700,400italic">-->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+
+<body ng-cloak ng-controller="MainCtrl">
+
+<div class="ui top fixed menu">
+    <div class="header item"><a href="#">Code Translation Eval</a></div>
+    <a class="item" ng-repeat="link in links" ng-href="#!{{link.url}}"
+       ng-class="{active: $route.current.activeTab == link.id}">{{link.name}}</a>
+</div>
+<div class="ui container top-margin"></div>
+<div class="main">
+    <div class="ui container">
+        <div id="loading-message" class="ui icon message">
+            <i class="notched circle loading icon"></i>
+            <div class="content">
+                <div class="header">Just one second</div>
+                <p>We're fetching that content for you.</p>
+            </div>
+        </div>
+        <div id="load-success-message" class="ui icon success message hidden">
+            <i class="check icon"></i>
+            <div class="content">
+                <div class="header">All set!</div>
+                <p>Loaded {{getCount()}} examples from server.</p>
+            </div>
+        </div>
+        <div ng-if="isReady()" ng-view></div>
+    </div>
+</div>
+
+{% if debug %}
+<script src="/static/lib/jquery/dist/jquery.js"></script>
+<script src="/static/lib/angular/angular.js"></script>
+<script src="/static/lib/angular-route/angular-route.js"></script>
+<script src="/static/lib/angular-sanitize/angular-sanitize.js"></script>
+<script src="/static/lib/semantic-ui/dist/semantic.js"></script>
+<script src="/static/lib/prismjs/components/prism-core.js"></script>
+<script src="/static/lib/prismjs/components/prism-clike.js"></script>
+<script src="/static/lib/prismjs/components/prism-c.js"></script>
+<!--<script src="/static/lib/prismjs/plugins/keep-markup/prism-keep-markup.js"></script>-->
+{% else %}
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/angular@1.7.0/angular.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/angular-route@1.7.0/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/angular-sanitize@1.7.0/angular-sanitize.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/semantic-ui@2.4.2/dist/semantic.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.20.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.20.0/components/prism-clike.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.20.0/components/prism-c.min.js"></script>
+{% endif %}
+<script type="text/javascript">
+    let _jsVersion = "{- static_version -}";
+</script>
+<script src="/static/app.js?version={- static_version -}"></script>
+
+</body>
+</html>
