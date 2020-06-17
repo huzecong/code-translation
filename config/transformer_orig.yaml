@@ -1,0 +1,4 @@
+!template
+  path: "templates/base.yaml"
+  overrides:
+    - !include "templates/varname_orig.yaml"

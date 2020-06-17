@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 import flutes
 import texar.torch as tx
 import torch
-import yaml
 from argtyped import *
 from termcolor import colored
 from texar.torch.run import *
@@ -61,7 +60,7 @@ def main() -> None:
         print(colored("Running in debug mode: no checkpoints or logs will be saved", "yellow"))
 
     with open(args.config_file) as f:
-        config: Dict[str, Any] = yaml.safe_load(f)
+        config: Dict[str, Any] = cotra.utils.load_yaml(f)
     # Do some validation before running time-consuming processes.
     assert os.path.exists(config["data"]["training_set"])
     assert all(os.path.exists(path) for path in config["data"]["valid_sets"].values())
