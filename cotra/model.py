@@ -7,11 +7,11 @@ from torch import nn
 from . import utils
 
 __all__ = [
-    "Transformer",
+    "Seq2seq",
 ]
 
 
-class Transformer(tx.ModuleBase):
+class Seq2seq(tx.ModuleBase):
     r"""A standalone sequence-to-sequence Transformer model, from "Attention
     Is All You Need". The Transformer model consists of the word embedding
     layer, position embedding layer, an encoder and a decoder. Both encoder
@@ -54,9 +54,19 @@ class Transformer(tx.ModuleBase):
                 input_dim=hidden_dim, output_dim=hidden_dim),
         }
         self.encoder = tx.modules.TransformerEncoder(hparams=transformer_hparams)
-        self.decoder = tx.modules.TransformerDecoder(
-            token_pos_embedder=self._embedding_fn, vocab_size=vocab.size,
-            output_layer=self.word_embedder.embedding, hparams=transformer_hparams)
+        if self._hparams.decoder == "transformer":
+            self.decoder = tx.modules.TransformerDecoder(
+                token_pos_embedder=self._embedding_fn, vocab_size=vocab.size,
+                output_layer=self.word_embedder.embedding, hparams=transformer_hparams)
+        elif self._hparams.decoder == "lstm":
+            rnn_hparams = tx.modules.AttentionRNNDecoder.default_hparams()
+            rnn_hparams['rnn_cell']['kwargs']['hidden_size'] = hidden_dim
+            self.decoder = tx.modules.AttentionRNNDecoder(
+                input_size=self.word_embedder.dim, encoder_output_size=self.encoder.output_size,
+                token_embedder=self.word_embedder, vocab_size=vocab.size,
+                output_layer=self.word_embedder.embedding, hparams=rnn_hparams)
+        else:
+            raise ValueError(f"Invalid 'decoder' hparam: {self._hparams.decoder}")
 
         self.smoothed_loss_func = LabelSmoothingLoss(
             label_confidence=self._hparams.loss_label_confidence,
@@ -65,6 +75,7 @@ class Transformer(tx.ModuleBase):
     @staticmethod
     def default_hparams():
         return {
+            "decoder": "transformer",  # ["transformer", "lstm"]
             "hidden_dim": 512,
             "max_sentence_length": 1024,
             "loss_label_confidence": 0.9,
@@ -116,10 +127,13 @@ class Transformer(tx.ModuleBase):
 
         if decoder_input is not None and labels is not None:
             # For training
-            outputs = self.decoder(
-                inputs=decoder_input, decoding_strategy="train_greedy",
-                memory=encoder_output, memory_sequence_length=encoder_input_length)
             label_lengths = (labels != 0).long().sum(dim=1)
+            outputs = self.decoder(
+                decoding_strategy="train_greedy",
+                inputs=decoder_input,  sequence_length=label_lengths,
+                memory=encoder_output, memory_sequence_length=encoder_input_length)
+            if self._hparams.decoder == "lstm":
+                outputs = outputs[0]
             is_target = (labels != 0).float()
             mle_loss = self.smoothed_loss_func(outputs.logits, labels, label_lengths)
             mle_loss = (mle_loss * is_target).sum() / is_target.sum()
@@ -127,7 +141,6 @@ class Transformer(tx.ModuleBase):
 
         else:
             start_tokens = encoder_input.new_full((batch_size,), self.vocab.sos_id)
-
             predictions = self.decoder(
                 memory=encoder_output, memory_sequence_length=encoder_input_length,
                 beam_width=beam_width, length_penalty=length_penalty,
@@ -173,7 +186,7 @@ class LabelSmoothingLoss(nn.Module):
             label_lengths(torch.LongTensor): specify the length of the labels
         """
         orig_shapes = (output.size(), target.size())
-        output = output.view(-1, self.tgt_vocab_size)
+        output = output.contiguous().view(-1, self.tgt_vocab_size)
         target = target.view(-1)
         model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob = model_prob.to(device=target.device)

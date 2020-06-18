@@ -27,10 +27,11 @@ class Args(Arguments):
     curriculum: Switch = True
     debug: Switch = False
     force: Switch = False
+    extra_config: Optional[str]  # if specified, will be parsed as dictionary and merged with config dictionary
 
 
 class ModelWrapper(nn.Module):
-    def __init__(self, model: cotra.Transformer, beam_width: int, length_penalty: float = 0.0):
+    def __init__(self, model: cotra.Seq2seq, beam_width: int, length_penalty: float = 0.0):
         super().__init__()
         self.model = model
         self.beam_width = beam_width
@@ -61,6 +62,10 @@ def main() -> None:
 
     with open(args.config_file) as f:
         config: Dict[str, Any] = cotra.utils.load_yaml(f)
+    if args.extra_config is not None:
+        import ast
+        extra_config = ast.literal_eval(args.extra_config)
+        cotra.utils.merge_dict(config, extra_config)
     # Do some validation before running time-consuming processes.
     assert os.path.exists(config["data"]["training_set"])
     assert all(os.path.exists(path) for path in config["data"]["valid_sets"].values())
@@ -106,7 +111,7 @@ def main() -> None:
     print("Dataset initialized")
 
     # Create model and optimizer
-    model = cotra.Transformer(vocab, hparams=config["model"])
+    model = cotra.Seq2seq(vocab, hparams=config["model"])
     model = ModelWrapper(model, beam_width=config["inference"]["beam_width"],
                          length_penalty=config["inference"]["length_penalty"])
 
