@@ -1,6 +1,6 @@
 lr_scheduler:
-  schedule: warmup
-  init_lr: 0.0001
+  schedule: invsqrt
+  lr: 6.0e-6
   warmup_steps: 8000
 
 training:

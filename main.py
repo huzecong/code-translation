@@ -1,5 +1,6 @@
 import copy
 import os
+import pprint
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -116,10 +117,8 @@ def main() -> None:
                          length_penalty=config["inference"]["length_penalty"])
 
     lr_config = config["lr_scheduler"]
-    is_static_lr = lr_config["schedule"] == "static"
-    scheduler_lambda = cotra.utils.get_lr_schedule(static=is_static_lr, warmup_steps=lr_config["warmup_steps"])
-    optim = torch.optim.Adam(model.parameters(), lr=lr_config["init_lr"], betas=(0.9, 0.997), eps=1e-9)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optim, scheduler_lambda)
+    optim = torch.optim.Adam(model.parameters(), lr=lr_config["lr"], betas=(0.9, 0.997), eps=1e-9)
+    scheduler = cotra.utils.get_lr_scheduler(optim, lr_config)
     print("Model constructed")
 
     training_config = config["training"]
@@ -133,6 +132,7 @@ def main() -> None:
         batching_strategy=batching_strategy,
         optimizer=optim,
         lr_scheduler=scheduler,
+        grad_clip=training_config.get("grad_clip", None),
         log_destination=[sys.stdout, *([output_dir / "log.txt"] if not args.debug else [])],
         log_every=cond.iteration(training_config["display_steps"]),
         validate_every=cond.iteration(training_config["eval_steps"]),
@@ -155,6 +155,7 @@ def main() -> None:
         show_live_progress=True,
     )
 
+    executor.write_log(pprint.pformat(config))
     all_datasets = {"train": train_dataset,
                     **{key: value for datasets in eval_datasets.values() for key, value in datasets.items()}}
     executor.write_log("Data size: " +

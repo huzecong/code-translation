@@ -60,7 +60,19 @@ class Seq2seq(tx.ModuleBase):
                 output_layer=self.word_embedder.embedding, hparams=transformer_hparams)
         elif self._hparams.decoder == "lstm":
             rnn_hparams = tx.modules.AttentionRNNDecoder.default_hparams()
-            rnn_hparams['rnn_cell']['kwargs']['hidden_size'] = hidden_dim
+            rnn_hparams['rnn_cell'].update({
+                "kwargs": {"num_units": hidden_dim},
+                "num_layers": 2,
+                "dropout": {
+                    "input_keep_prob": 0.9,
+                    "state_keep_prob": 0.9,
+                    "variational_recurrent": True,
+                },
+                "residual": True,
+            })
+            rnn_hparams['attention'].update({
+                "kwargs": {"num_units": hidden_dim},
+            })
             self.decoder = tx.modules.AttentionRNNDecoder(
                 input_size=self.word_embedder.dim, encoder_output_size=self.encoder.output_size,
                 token_embedder=self.word_embedder, vocab_size=vocab.size,
@@ -130,7 +142,7 @@ class Seq2seq(tx.ModuleBase):
             label_lengths = (labels != 0).long().sum(dim=1)
             outputs = self.decoder(
                 decoding_strategy="train_greedy",
-                inputs=decoder_input,  sequence_length=label_lengths,
+                inputs=decoder_input, sequence_length=label_lengths,
                 memory=encoder_output, memory_sequence_length=encoder_input_length)
             if self._hparams.decoder == "lstm":
                 outputs = outputs[0]

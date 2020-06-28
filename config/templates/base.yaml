@@ -20,8 +20,8 @@ model:
   loss_label_confidence: 0.9
 
 lr_scheduler:
-  schedule: warmup
-  init_lr: 0.0883  # 2 / sqrt(hidden_dim)
+  schedule: invsqrt
+  lr: 7.0e-4
   warmup_steps: 16000
 
 training:

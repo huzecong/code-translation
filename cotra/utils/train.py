@@ -1,26 +1,60 @@
 import math
-from typing import Callable, List, Optional
+from typing import Any, Dict, List, Optional
+
+import torch
 
 __all__ = [
-    "get_lr_schedule",
+    "get_lr_scheduler",
     "Vocab",
 ]
 
 
-def get_lr_schedule(*, static: bool, warmup_steps: Optional[int] = None) -> Callable[[int], float]:
+def get_lr_scheduler(optim: torch.optim.Optimizer,
+                     lr_config: Dict[str, Any]) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
     r"""Calculate the learning rate multiplier given current step and the number
     of warm-up steps. The learning rate schedule follows a linear warm-up and
     square-root decay.
     """
-    if static:
-        def lr_multiplier(step: int) -> float:
-            return 1.0
-    else:
-        assert warmup_steps is not None
+    base_lr = lr_config["lr"]
+    warmup_steps = lr_config.get("warmup_steps", 0)
 
-        def lr_multiplier(step: int) -> float:
-            return min(1.0, step / warmup_steps) * (1 / math.sqrt(max(step, warmup_steps)))  # type: ignore
-    return lr_multiplier
+    if lr_config["schedule"] == "static":
+        # Constant
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            return 1.0
+
+    elif lr_config["schedule"] == "invsqrt":
+        # Inverse square root
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            return 1 / math.sqrt(max(1, step - warmup_steps))
+
+    elif lr_config["schedule"] == "exponential":
+        # Exponential (scale by constant every few iterations)
+        scale = lr_config["scale"]
+        per_steps = lr_config["per_steps"]
+
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            return math.pow(scale, (step - warmup_steps) // per_steps)
+
+    elif lr_config["schedule"] == "cosine":
+        # Cosine with hard-resets
+        reset_steps = lr_config.get("reset_steps", 200000)
+        min_lr_multiplier = max(0.0, lr_config.get("min_lr", 0.0)) / base_lr
+
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            progress = (step - warmup_steps) / max(1, reset_steps - warmup_steps)
+            return min_lr_multiplier + (1 - min_lr_multiplier) * (0.5 * (1.0 + math.cos(math.pi * (progress % 1.0))))
+    else:
+        raise ValueError(f"Invalid LR schedule: {lr_config['schedule']}")
+    return torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda)
 
 
 class Vocab:
