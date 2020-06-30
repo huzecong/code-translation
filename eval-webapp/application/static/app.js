@@ -10,10 +10,7 @@ let App = angular.module('App', [
         $routeProvider
             .when('/summary', {
                 controller: "SummaryCtrl",
-                templateUrl: function (routeParams) {
-                    console.log("/summary", routeParams);
-                    return "summary.html";
-                },
+                templateUrl: "summary.html",
                 activeTab: "summary",
             })
             .when('/example/:id?', {
@@ -24,18 +21,33 @@ let App = angular.module('App', [
                 },
                 activeTab: "example",
             })
+            .when('/compare', {
+                controller: "CompareCtrl",
+                templateUrl: "compare.html",
+            })
             .otherwise({
                 redirectTo: '/summary',
             });
     }
-]).directive('ngPrism', ['$interpolate', function ($interpolate) {
+]);
+
+App.directive('ngPrism', function () {
     return {
         restrict: 'E',
         template: `<pre><code ng-transclude></code></pre>`,
         replace: true,
-        transclude: true
+        transclude: true,
+        link: function ($scope, $element) {
+            $scope.$$postDigest(function () {
+                const codeElement = $element.find("pre").get(0);
+                console.log(codeElement);
+                Prism.highlightElement(codeElement);
+            });
+        },
     };
-}]).directive('ngCheck', function () {
+});
+
+App.directive('ngCheck', function () {
     return {
         restrict: 'E',
         scope: {
@@ -117,7 +129,7 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
                     </tr>
                 </tbody>
             </table>
-        `
+        `,
     };
 });
 
@@ -129,11 +141,80 @@ App.directive('ngHypothesis', function () {
             target: "=",
         },
         templateUrl: "hypothesis.html",
-        link: function($scope, $element) {
-            $scope.$watch("data", function() {
-                const codeElement = $element.find("pre").get(0);
-                Prism.highlightElement(codeElement);
-            });
+    };
+});
+
+App.controller('AccordionCtrl', ['$scope', function ($scope) {
+    let _active = {};
+    $scope.active = {
+        setDefault: function (key, value) {
+            if (_active[key] === undefined)
+                _active[key] = value;
+        },
+        get: function (key) {
+            return _active[key];
+        },
+        toggle: function (key) {
+            _active[key] = !_active[key];
+        },
+    };
+}]).directive('ngAccordion', function () {
+    return {
+        controller: 'AccordionCtrl',
+        restrict: 'E',
+        scope: {
+            exclusive: "=?",
+            defaultActive: "=?",
+        },
+        transclude: true,
+        template: `
+            <div class="ui styled fluid accordion" ng-transclude>
+            </div>
+        `,
+        link: {
+            pre: function ($scope, $element) {
+                if (angular.isUndefined($scope.defaultActive))
+                    $scope.defaultActive = false;
+                if (angular.isUndefined($scope.exclusive))
+                    $scope.exclusive = true;
+                $scope.$$postDigest(function () {
+                    $element.accordion({
+                        exclusive: $scope.exclusive,
+                    });
+                });
+            }
+        },
+    };
+}).directive('ngAccordionEntry', function () {
+    return {
+        require: '^ngAccordion',
+        restrict: 'E',
+        scope: {
+            id: "@",
+            name: "@",
+            defaultActive: "=?",
+        },
+        transclude: true,
+        template: `
+            <div class="title" ng-click="active.toggle(id)">
+                <i class="dropdown icon"></i>
+                {{name}}
+            </div>
+            <div class="content" ng-transclude></div>
+        `,
+        link: {
+            pre: function ($scope, $element) {
+                const $parentScope = $element.parent().scope();
+                if (angular.isUndefined($scope.defaultActive))
+                    $scope.defaultActive = $parentScope.defaultActive;
+                if (angular.isUndefined($scope.exclusive))
+                    $scope.exclusive = true;
+
+                $scope.active = $parentScope.active;
+                $scope.active.setDefault($scope.id, $scope.defaultActive);
+                if ($scope.active.get($scope.id))
+                    $element.find("div").addClass("active");
+            },
         },
     };
 });
@@ -144,7 +225,7 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         summary: null,
         examples: [],
     };
-    $http.get("/static/data/eval-small.json").then(function (response) {
+    $http.get("/static/data/eval.json").then(function (response) {
         state.examples = response.data.examples;
         state.summary = response.data.summary;
         state.ready = true;
@@ -187,6 +268,7 @@ App.controller('MainCtrl', ['State', '$route', '$scope', '$timeout', function (S
     $scope.links = [
         {id: "summary", name: "Summary", url: "/summary"},
         {id: "example", name: "Browse Examples", url: "/example"},
+        {id: "compare", name: "Compare Systems", url: "/compare"},
     ];
 
     $scope.isReady = State.isReady;

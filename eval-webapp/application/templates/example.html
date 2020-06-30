@@ -34,32 +34,18 @@
 
     <h3 class="ui header">Example {{idx}} / {{exampleCount}}</h3>
 
-    <div class="ui styled fluid accordion">
-        <div class="active title">
-            <i class="dropdown icon"></i>
-            Metadata
-        </div>
-        <div class="active content" ng-init="meta = example.meta_data">
-            <ul>
+    <ng-accordion exclusive="false" default-active="false">
+        <ng-accordion-entry id="metadata" name="Metadata" default-active="true">
+            <ul ng-init="meta = example.meta_data">
                 <li>Repository: <a href="https://github.com/{{meta.repo}}">{{meta.repo}}</a>
                 </li>
                 <li>Binary Hash: {{meta.sha}}</li>
             </ul>
-        </div>
-
-        <div class="active title">
-            <i class="dropdown icon"></i>
-            Metric Summary
-        </div>
-        <div class="active content" ng-init="meta = example.meta_data">
-            <ng-metric-table values="metricValues" metrics="metricDescriptions" names="predNames"></ng-metric-table>
-        </div>
-
-        <div class="active title" ng-repeat-start="set in srcTgt">
-            <i class="dropdown icon"></i>
-            {{set[1]}}
-        </div>
-        <div class="active content" ng-repeat-end ng-init="data = set[2]">
+        </ng-accordion-entry>
+        <ng-accordion-entry id="summary" name="Metric Summary" default-active="true">
+            <ng-metric-table values="metricValues" metrics="metricDescriptions" names="predNames"/>
+        </ng-accordion-entry>
+        <ng-accordion-entry ng-repeat="set in srcTgt" id="src-tgt-{{$index}}" name="{{set[1]}}" ng-init="data = set[2]">
             <pre id="{{set[0]}}-code" class="language-c"><code>{{data.code}}</code></pre>
             <ul>
                 <li>Function name: <code>{{data.func_name}}</code></li>
@@ -70,14 +56,11 @@
                     </ul>
                 </li>
             </ul>
-        </div>
-
-        <div class="active title" ng-repeat-start="data in example.preds" ng-init="predIdx = $index">
-            <i class="dropdown icon"></i>
-            {{data['source']}}
-        </div>
-        <ng-hypothesis data="data" target="example.tgt" ng-repeat-end/>
-    </div>
+        </ng-accordion-entry>
+        <ng-accordion-entry ng-repeat="data in example.preds" id="pred-{{$index}}" name="{{data['source']}}">
+            <ng-hypothesis data="data" target="example.tgt"/>
+        </ng-accordion-entry>
+    </ng-accordion>
 </div>
 <script type="text/javascript">
     $(".ui.sticky").sticky({
@@ -85,8 +68,5 @@
         observeChanges: true,
         context: "#example",
         scrollContext: ".main",
-    });
-    $('.ui.accordion').accordion({
-        exclusive: false,
     });
 </script>

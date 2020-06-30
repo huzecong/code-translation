@@ -4,6 +4,8 @@
   "globals": {
     // Angular
     "angular": false,
+    "console": false,
+    "Prism": false,
 
     // Angular mocks
     "module": false,
