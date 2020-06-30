@@ -1,0 +1,43 @@
+<div class="active content">
+    <pre class="language-c"><code>{{data.code}}</code></pre>
+    <ul>
+        <li>Function name:
+            <ng-check pred="data.func_name" label="target.func_name"/>
+        </li>
+        <li>Return type:
+            <ng-check pred="data.ret_type" label="target.ret_type"/>
+        </li>
+        <li>Arguments:
+            <ul>
+                <li ng-repeat="arg in data.args">
+                    <ng-check cond="arg[2]" pred="arg[0]">
+                        <span ng-if="arg[2] === null">(redundant)</span>
+                    </ng-check>
+                    : <code>{{arg[1]}}</code>
+                </li>
+                <li ng-if="data.missing_args && data.missing_args.length > 0">
+                    <u>Missing:</u>
+                    <span ng-repeat-start="arg in data.missing_args"><code class="negative">{{arg}}</code></span>
+                    <span ng-repeat-end ng-if="!$last">, </span>
+                </li>
+            </ul>
+        </li>
+        <li ng-if="data.missing_strings.length > 0">Missing string literals:
+            <ul>
+                <li ng-repeat="str in data.missing_strings"><code class="negative">{{str}}</code></li>
+            </ul>
+        </li>
+        <li ng-if="data.redundant_strings.length > 0">Redundant string literals:
+            <ul>
+                <li ng-repeat="str in data.redundant_strings"><code class="negative">{{str}}</code></li>
+            </ul>
+        </li>
+        <li>Metrics:
+            <ul>
+                <li ng-repeat="metric in metricDescriptions" ng-init="value = metricValues[$index][predIdx]">
+                    {{metric.name}}: {{metric.formatter ? metric.formatter(value) : value}}
+                </li>
+            </ul>
+        </li>
+    </ul>
+</div>

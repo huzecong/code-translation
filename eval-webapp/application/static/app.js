@@ -121,6 +121,23 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
     };
 });
 
+App.directive('ngHypothesis', function () {
+    return {
+        restrict: 'E',
+        scope: {
+            data: "=",
+            target: "=",
+        },
+        templateUrl: "hypothesis.html",
+        link: function($scope, $element) {
+            $scope.$watch("data", function() {
+                const codeElement = $element.find("pre").get(0);
+                Prism.highlightElement(codeElement);
+            });
+        },
+    };
+});
+
 App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
     let state = {
         ready: false,

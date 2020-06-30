@@ -60,7 +60,7 @@
             {{set[1]}}
         </div>
         <div class="active content" ng-repeat-end ng-init="data = set[2]">
-            <pre id="{{set[0]}}-code"><code class="language-c">{{data.code}}</code></pre>
+            <pre id="{{set[0]}}-code" class="language-c"><code>{{data.code}}</code></pre>
             <ul>
                 <li>Function name: <code>{{data.func_name}}</code></li>
                 <li>Return type: <code>{{data.ret_type}}</code></li>
@@ -76,49 +76,7 @@
             <i class="dropdown icon"></i>
             {{data['source']}}
         </div>
-        <div class="active content" ng-init="tgt = example.tgt" ng-repeat-end>
-            <pre><code class="language-c">{{data.code}}</code></pre>
-            <ul>
-                <li>Function name:
-                    <ng-check pred="data.func_name" label="tgt.func_name"/>
-                </li>
-                <li>Return type:
-                    <ng-check pred="data.ret_type" label="tgt.ret_type"/>
-                </li>
-                <li>Arguments:
-                    <ul>
-                        <li ng-repeat="arg in data.args">
-                            <ng-check cond="arg[2]" pred="arg[0]">
-                                <span ng-if="arg[2] === null">(redundant)</span>
-                            </ng-check>
-                            : <code>{{arg[1]}}</code>
-                        </li>
-                        <li ng-if="data.missing_args && data.missing_args.length > 0">
-                            <u>Missing:</u>
-                            <span class="highlight" ng-repeat-start="arg in data.missing_args">{{arg}}</span>
-                            <span ng-repeat-end ng-if="!$last">, </span>
-                        </li>
-                    </ul>
-                </li>
-                <li ng-if="data.missing_strings.length > 0">Missing string literals:
-                    <ul>
-                        <li ng-repeat="str in data.missing_strings"><code class="negative">{{str}}</code></li>
-                    </ul>
-                </li>
-                <li ng-if="data.redundant_strings.length > 0">Redundant string literals:
-                    <ul>
-                        <li ng-repeat="str in data.redundant_strings"><code class="negative">{{str}}</code></li>
-                    </ul>
-                </li>
-                <li>Metrics:
-                    <ul>
-                        <li ng-repeat="metric in metricDescriptions" ng-init="value = metricValues[$index][predIdx]">
-                            {{metric.name}}: {{metric.formatter ? metric.formatter(value) : value}}
-                        </li>
-                    </ul>
-                </li>
-            </ul>
-        </div>
+        <ng-hypothesis data="data" target="example.tgt" ng-repeat-end/>
     </div>
 </div>
 <script type="text/javascript">
