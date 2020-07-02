@@ -1,0 +1,115 @@
+{
+	"systems": [
+		{
+			"key": "decompiled",
+			"name": "Decompiled",
+			"description": "Code produced by the decompiler",
+			"metrics": {
+				"bleu4": 25.7418241,
+				"arg_name": {
+					"correct": 100,
+					"total": 200
+				},
+				"pointer": {
+					"true_positive": 1,
+					"false_positive": 1,
+					"true_negative": 1,
+					"false_negative": 1
+				},
+				"...": {}
+			}
+		}
+	],
+	"metrics": [
+		{
+			"key": "bleu4",
+			"name": "BLEU4",
+			"higher_is_better": true,
+			"type": "float",  // "type" defines comparison and formatting
+			"formatter": {
+				"fixed": 2
+			},
+			"display_in_summary": true,
+			"display_in_examples": true
+		},
+		{
+			"key": "overlap_score",
+			"name": "Similarity score",
+			"higher_is_better": null,  // not comparable
+			"type": "float",
+			"formatter": {
+				"fixed": 3
+			},
+			"display_in_summary": false,
+			"display_in_examples": true
+		},
+		{
+			"key": "arg_name",
+			"name": "Correct argument names",
+			"higher_is_better": true,
+			"type": "frac",
+			"display_in_summary": true,
+			"display_in_examples": false
+		},
+		{
+			"key": "pointer",
+			"name": "Pointer conversion",
+			"higher_is_better": null,
+			"type": "confusion_mat",
+			"display_in_summary": true,
+			"display_in_examples": false
+		}
+	],
+	"examples": [
+		{
+			"index": 0,
+			"meta_data": {
+				"repo": "...",
+				"sha": "..."
+			},
+			"var_map": {
+				"var_id": ["decomp_name", "orig_name"]
+			},
+			"target": {
+				"code": "...",
+				"func_name": "...",
+				"ret_type": "...",
+				"args": [
+					["name", "type"]
+				]
+			},
+			"predictions": {
+				"decompiled": {
+					"use_var_map": true,
+					"...": {}
+				},
+				"seq2seq_d": {
+					"code": "...",
+					"func_name": "...",
+					"ret_type": "...",
+					"args": [
+						["name", "type", true],  // correct
+						["name", "type", false], // wrong
+						["name", "type", null]   // redundant
+					],
+					"missing_args": ["name"],
+					"missing_strings": ["string"],
+					"redundant_strings": ["string"],
+					"metrics": {
+						"bleu4": 100.0,
+						"bleu8": 100.0,
+						"overlap_score": 1.0,
+						"bleu4_no_var": 100.0,
+						"pointer": {
+							"true_positive": 1,
+							"false_positive": 1,
+							"true_negative": 1,
+							"false_negative": 1
+						},
+						"...": {}
+					}
+				}
+			}
+		}
+	]
+}

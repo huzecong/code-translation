@@ -34,7 +34,7 @@
 
     <h3 class="ui header">Example {{idx}} / {{exampleCount}}</h3>
 
-    <ng-accordion exclusive="false" default-active="false">
+    <ng-accordion id="example-outputs" exclusive="false" default-active="false">
         <ng-accordion-entry id="metadata" name="Metadata" default-active="true">
             <ul ng-init="meta = example.meta_data">
                 <li>Repository: <a href="https://github.com/{{meta.repo}}">{{meta.repo}}</a>
@@ -43,22 +43,23 @@
             </ul>
         </ng-accordion-entry>
         <ng-accordion-entry id="summary" name="Metric Summary" default-active="true">
-            <ng-metric-table values="metricValues" metrics="metricDescriptions" names="predNames"/>
+            <ng-metric-table values="metricValues" metrics="metrics" names="systemNames" align="right"/>
         </ng-accordion-entry>
-        <ng-accordion-entry ng-repeat="set in srcTgt" id="src-tgt-{{$index}}" name="{{set[1]}}" ng-init="data = set[2]">
-            <pre id="{{set[0]}}-code" class="language-c"><code>{{data.code}}</code></pre>
+        <ng-accordion-entry id="target" name="Target (Ground truth)">
+            <ng-prism id="target-code" language="c" code="example.target.code"></ng-prism>
             <ul>
-                <li>Function name: <code>{{data.func_name}}</code></li>
-                <li>Return type: <code>{{data.ret_type}}</code></li>
+                <li>Function name: <code>{{example.target.func_name}}</code></li>
+                <li>Return type: <code>{{example.target.ret_type}}</code></li>
                 <li>Arguments:
                     <ul>
-                        <li ng-repeat="arg in example.src.args"><code>{{arg[0]}}</code>: <code>{{arg[1]}}</code></li>
+                        <li ng-repeat="arg in example.target.args"><code>{{arg[0]}}</code>: <code>{{arg[1]}}</code></li>
                     </ul>
                 </li>
             </ul>
         </ng-accordion-entry>
-        <ng-accordion-entry ng-repeat="data in example.preds" id="pred-{{$index}}" name="{{data['source']}}">
-            <ng-hypothesis data="data" target="example.tgt"/>
+        <ng-accordion-entry ng-repeat="system in systems" id="pred-{{$index}}-{{system.key}}" name="{{system.name}}">
+            <ng-hypothesis data="example.predictions[system.key]" target="example.target"
+                           metrics="metrics" var-map="system.use_var_map ? example.var_map : undefined"/>
         </ng-accordion-entry>
     </ng-accordion>
 </div>

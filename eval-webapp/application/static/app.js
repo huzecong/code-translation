@@ -34,15 +34,35 @@ let App = angular.module('App', [
 App.directive('ngPrism', function () {
     return {
         restrict: 'E',
-        template: `<pre><code ng-transclude></code></pre>`,
-        replace: true,
-        transclude: true,
-        link: function ($scope, $element) {
-            $scope.$$postDigest(function () {
-                const codeElement = $element.find("pre").get(0);
-                console.log(codeElement);
-                Prism.highlightElement(codeElement);
-            });
+        template: `<pre><code class="language-{{language}}"></code></pre>`,
+        scope: {
+            language: "@",
+            code: "=",
+            varMap: "=?",
+        },
+        link: {
+            post: function ($scope, $element) {
+                const codeElement = $element.find("code").get(0);
+                $scope.$watch("code", function () {
+                    // We have to manually set code contents, because Prism removes stuff that AngularJS uses to keep
+                    // track of bindings.
+                    let $parent = $element.parent();
+                    while ($parent.attr("name") === undefined) $parent = $parent.parent();
+                    const systemName = $parent.attr("name");
+                    codeElement.innerHTML = $scope.code;
+                    Prism.highlightElement(codeElement);
+
+                    if ($scope.varMap) {
+                        let src = codeElement.innerHTML;
+                        for (const [varId, varNames] of Object.entries($scope.varMap)) {
+                            let decompSpan = "<span class='decompiled-var'>" + varNames[0] + "</span>";
+                            let oracleSpan = "<span class='oracle-var'>" + varNames[1] + "</span>";
+                            src = src.replace(new RegExp(varId, 'g'), decompSpan + oracleSpan);
+                        }
+                        codeElement.innerHTML = src;
+                    }
+                });
+            },
         },
     };
 });
@@ -68,17 +88,10 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
     function updateTable() {
         $scope.formattedValues = [];
         $scope.cellClasses = [];
-        for (let idx = 0; idx < $scope.metrics.length; ++idx) {
-            let metric = $scope.metrics[idx];
-            let rowValues = [];
-            let rowFormattedValues = [];
+        for (const metric of $scope.metrics) {
+            let rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
+            let rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
             let rowClasses = [];
-            for (let value of $scope.values[idx]) {
-                let convertedValue = metric.converter ? metric.converter(value) : value;
-                let formattedValue = metric.formatter ? metric.formatter(value) : value;
-                rowValues.push(convertedValue);
-                rowFormattedValues.push(formattedValue);
-            }
             let bestValue = null, worstValue = null;
             if (metric.higherIsBetter === true) {
                 bestValue = Math.max(...rowValues);
@@ -91,7 +104,7 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
                 let classes = [];
                 if (value === bestValue) classes.push("positive");
                 else if (value === worstValue) classes.push("negative");
-                if (metric.align) classes.push(metric.align, "aligned");
+                if ($scope.align) classes.push($scope.align, "aligned");
                 rowClasses.push(classes.join(" "));
             }
             $scope.formattedValues.push(rowFormattedValues);
@@ -108,9 +121,10 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
             values: "=",
             metrics: "=",
             names: "=",
+            align: "@?",
         },
         template: `
-            <table class="ui celled definition table">
+            <table class="ui celled definition table metric-table">
                 <thead><tr>
                     <th></th>
                     <th class="center aligned" ng-repeat="x in names">{{x}}</th>
@@ -139,13 +153,15 @@ App.directive('ngHypothesis', function () {
         scope: {
             data: "=",
             target: "=",
+            metrics: "=",
+            varMap: "=?",
         },
         templateUrl: "hypothesis.html",
     };
 });
 
-App.controller('AccordionCtrl', ['$scope', function ($scope) {
-    let _active = {};
+App.controller('AccordionCtrl', ['State', '$scope', '$element', function (State, $scope, $element) {
+    let _active = State.getPersistenceState("accordion-" + $element.id);
     $scope.active = {
         setDefault: function (key, value) {
             if (_active[key] === undefined)
@@ -222,12 +238,73 @@ App.controller('AccordionCtrl', ['$scope', function ($scope) {
 App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
     let state = {
         ready: false,
-        summary: null,
+        metrics: null,
+        systems: null,
         examples: [],
     };
-    $http.get("/static/data/eval.json").then(function (response) {
+    let _persistence = {};
+
+    class Metric {
+        constructor(metricJson) {
+            this.key = metricJson.key;
+            this.name = metricJson.name;
+            this.higherIsBetter = metricJson.higher_is_better;
+            this.formatter = metricJson.formatter || {};
+            this.displayInSummary = metricJson.display_in_summary;
+            this.displayInExample = metricJson.display_in_example;
+        }
+
+        toValue(value) { return value; }
+
+        difference(lhs, rhs) { return lhs - rhs; }
+    }
+
+    class IntMetric extends Metric {
+        format(value) { return value.toString(); }
+    }
+
+    class FloatMetric extends Metric {
+        format(value) {
+            if (this.formatter.fixed !== undefined) value = value.toFixed(this.formatter.fixed);
+            return value.toString();
+        }
+    }
+
+    class PortionMetric extends Metric {
+        format(value) {
+            return value.correct + " / " + value.total;
+        }
+
+        toValue(value) { return value.correct / value.total; }
+
+        difference(lhs, rhs) {
+            return {
+                correct: lhs.correct - rhs.correct,
+                total: lhs.total - rhs.total,
+            };
+        }
+    }
+
+    class ConfusionMatMetric extends Metric {
+        format(value) {
+            const tp = value.true_positive, fp = value.false_positive, fn = value.false_negative;
+            return "P: " + (tp + " / " + (tp + fp)) + ", R: " + (tp + " / " + (tp + fn));
+        }
+    }
+
+    const metricClass = {
+        int: IntMetric,
+        float: FloatMetric,
+        portion: PortionMetric,
+        confusion_mat: ConfusionMatMetric,
+    };
+
+    $http.get("/static/data/eval-test.json").then(function (response) {
         state.examples = response.data.examples;
-        state.summary = response.data.summary;
+        state.metrics = [];
+        for (const metric of response.data.metrics)
+            state.metrics.push(new metricClass[metric.type](metric));
+        state.systems = response.data.systems;
         state.ready = true;
     });
 
@@ -235,8 +312,11 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         getExample: function (idx) {
             return state.examples[idx];
         },
-        getSummary: function () {
-            return state.summary;
+        getMetrics: function () {
+            return state.metrics;
+        },
+        getSystems: function () {
+            return state.systems;
         },
         getCount: function () {
             return state.examples.length;
@@ -245,6 +325,12 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
             return state.ready;
         },
         lastIndex: 1,
+        getPersistenceState: function (id) {
+            let obj = _persistence[id];
+            if (obj === undefined)
+                obj = _persistence[id] = {};
+            return obj;
+        }
     };
 }]);
 
@@ -294,53 +380,14 @@ App.controller('MainCtrl', ['State', '$route', '$scope', '$timeout', function (S
 }]);
 
 App.controller('SummaryCtrl', ['State', '$scope', function (State, $scope) {
-    $scope.summaryNames = State.getSummary().summary_table[0].slice(1);
-    $scope.summaryValues = [];
-    for (let row of State.getSummary().summary_table.slice(1))
-        $scope.summaryValues.push(row.slice(1));
-
-    function parseFrac(str) {
-        let [numer, denom] = str.split(" / ");
-        return numer / denom;
-    }
-
-    $scope.summaryMetrics = [
-        // name, higher-is-better?, formatter, converter
-        {name: "BLEU4", higherIsBetter: true, converter: parseFloat, align: "center"},
-        {name: "BLEU8", higherIsBetter: true, converter: parseFloat, align: "center"},
-        {name: "BLEU4 (ignoring identifiers)", higherIsBetter: true, converter: parseFloat, align: "center"},
-        {name: "Unparsable function signature", higherIsBetter: false, converter: parseFrac, align: "center"},
-        {name: "Correct func names", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Correct return types (ignoring CV)", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Correct return types (strict)", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Correct argument names", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Correct argument types (ignoring CV)", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Correct argument types (strict)", higherIsBetter: true, converter: parseFrac, align: "center"},
-        {name: "Missing arguments", higherIsBetter: false, converter: parseFrac, align: "center"},
-        {name: "Redundant arguments", higherIsBetter: false, converter: parseFloat, align: "center"},
-        {name: "Missing string literals", higherIsBetter: false, converter: parseFloat, align: "center"},
-        {name: "Redundant string literals", higherIsBetter: false, converter: parseFloat, align: "center"},
-        {name: "Pointer conversion", higherIsBetter: null, align: "center"},
-    ];
+    $scope.summaryNames = State.getSystems().map(system => system.name);
+    $scope.summaryValues = State.getSystems().map(system => system.metrics);
+    $scope.summaryMetrics = State.getMetrics().filter(metric => metric.displayInSummary);
 }]);
 
 App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '$scope', '$timeout', function (State, $location, $route, $routeParams, $scope, $timeout) {
-    $scope.metricKeys = ["bleu4", "bleu8", "bleu4_no_var", "overlap_score"];
-
-    function fixed(digits) {
-        return function (x) {
-            return x.toFixed(digits);
-        };
-    }
-
-    $scope.metricDescriptions = [
-        {name: "BLEU4", higherIsBetter: true, formatter: fixed(2), align: "right"},
-        {name: "BLEU8", higherIsBetter: true, formatter: fixed(2), align: "right"},
-        {name: "BLEU4 (ignoring identifiers)", higherIsBetter: true, formatter: fixed(2), align: "right"},
-        {name: "Similarity score", higherIsBetter: null, formatter: fixed(3), align: "right"},
-    ];
-
     $scope.exampleCount = State.getCount();
+    let _firstTime = true;
 
     function validateIndex(idx) {
         idx = parseInt(idx);
@@ -348,6 +395,10 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
             return idx;
         return null;
     }
+
+    $scope.metrics = State.getMetrics().filter(metric => metric.displayInExample);
+    $scope.systems = State.getSystems();
+    $scope.systemNames = State.getSystems().map(system => system.name);
 
     $scope.gotoExampleIdx = null;
     $scope.switchExample = function (idx) {
@@ -359,40 +410,8 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
 
         // Compute everything that's needed to render this example.
         $scope.example = State.getExample(idx - 1);
-        $scope.srcTgt = [
-            ["src", "Decompiled (source)", $scope.example.src],
-            ["tgt", "Original (target)", $scope.example.tgt],
-        ];
-
-        // Compute metric comparisons.
-        $scope.metricValues = [];
-        $scope.predNames = [];
-        for (let key of $scope.metricKeys) {
-            let values = [];
-            for (let data of $scope.example.preds)
-                values.push(data[key]);
-            $scope.metricValues.push(values);
-        }
-        for (let data of $scope.example.preds)
-            $scope.predNames.push(data.source);
-
-        // $timeout(function () {
-        // Add syntax highlighting after digest cycle, so the code is fully-loaded.
-        $scope.$$postDigest(function () {
-            Prism.highlightAll();
-
-            let src = $("#src-code").html();
-            let varMap = $scope.example.var_map;
-            for (const [varId, varNames] of Object.entries(varMap)) {
-                let decompSpan = "<span class='decompiled-var'>" + varNames[0] + "</span>";
-                let oracleSpan = "<span class='oracle-var'>" + varNames[1] + "</span>";
-                src = src.replace(new RegExp(varId, 'g'), decompSpan + oracleSpan);
-            }
-            $("#src-code").html(src);
-            $scope.updateVarName();
-            console.log("Switched to example " + idx);
-        });
-        // }, 100);
+        $scope.metricValues = $scope.systems.map(system => $scope.example.predictions[system.key].metrics);
+        console.log("Switched to example " + idx);
     };
     $scope.gotoInputError = false;
     $scope.updateGoto = (function () {
@@ -429,4 +448,16 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
 
     let idx = validateIndex($routeParams.id) || State.lastIndex;
     $scope.switchExample(idx);
+    // Update variable names after each digest cycle, so the code is fully-loaded.
+    $scope.$watch(function () {
+        $scope.$$postDigest($scope.updateVarName);
+    });
+}]);
+
+App.controller('CompareCtrl', ['State', '$scope', '$timeout', function (State, $scope, $timeout) {
+    $scope.$$postDigest(function () {
+        $(".ui.dropdown").dropdown({
+            values: [],
+        });
+    });
 }]);

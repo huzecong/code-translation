@@ -20,11 +20,17 @@ div.main {
 
 @media screen and (max-width: 767px) {
     div.main > .container {
-        max-width: calc(100vw - 150px) !important;
+        max-width: calc(100vw - 50px) !important;
     }
 }
 
-@media screen and (min-width: 768px) {
+@media screen and (min-width: 768px) and (max-width: 991px) {
+    div.main > .container {
+        max-width: calc(100vw - 220px) !important;
+    }
+}
+
+@media screen and (min-width: 992px) {
     div.main > .container {
         max-width: calc(100vw - 300px) !important;
     }
@@ -47,14 +53,37 @@ div.main {
     margin: 0 auto 0.5rem !important;
 }
 
-#example #src-code code .decompiled-var {
+ng-prism pre code .decompiled-var {
     text-decoration: underline solid red;
 }
 
-#example #src-code code .oracle-var {
+ng-prism pre code .oracle-var {
     text-decoration: underline solid green;
 }
 
 .hide {
     display: none !important;
+}
+
+.ui.styled.accordion .content ul {
+    margin-block-end: 4px;
+}
+
+
+/* Sticky table headers */
+.ui.definition.table thead tr:first-child > th:not(:first-child) {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: -20px;  /* to offset the 20px padding-top in .main */
+    margin-bottom: 41px;  /* offset for the default height of a row */
+    z-index: 2;
+    border-top: 1px solid rgba(34, 36, 38, 0.15);
+}
+
+.ui.definition.table thead tr:first-child > th:nth-child(2) {
+    border-radius: 0.28571429rem 0 0 0;
+}
+
+.ui.definition.table {
+    border-top: 0 !important;
 }

@@ -1,5 +1,5 @@
-<div class="active content">
-    <pre class="language-c"><code>{{data.code}}</code></pre>
+<div class="hypothesis">
+    <ng-prism language="c" code="data.code" var-map="varMap"></ng-prism>
     <ul>
         <li>Function name:
             <ng-check pred="data.func_name" label="target.func_name"/>
@@ -34,8 +34,8 @@
         </li>
         <li>Metrics:
             <ul>
-                <li ng-repeat="metric in metricDescriptions" ng-init="value = metricValues[$index][predIdx]">
-                    {{metric.name}}: {{metric.formatter ? metric.formatter(value) : value}}
+                <li ng-repeat="metric in metrics" ng-init="value = data.metrics[metric.key]">
+                    {{metric.name}}: {{metric.format(data.metrics[metric.key])}}
                 </li>
             </ul>
         </li>

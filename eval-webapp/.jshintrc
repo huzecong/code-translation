@@ -4,8 +4,11 @@
   "globals": {
     // Angular
     "angular": false,
+
+    // builtin stuff & jQuery
     "console": false,
     "Prism": false,
+    "$": false,
 
     // Angular mocks
     "module": false,
