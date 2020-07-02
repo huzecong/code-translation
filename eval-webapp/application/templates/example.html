@@ -36,10 +36,11 @@
 
     <ng-accordion id="example-outputs" exclusive="false" default-active="false">
         <ng-accordion-entry id="metadata" name="Metadata" default-active="true">
-            <ul ng-init="meta = example.meta_data">
-                <li>Repository: <a href="https://github.com/{{meta.repo}}">{{meta.repo}}</a>
+            <ul>
+                <li>Repository:
+                    <a href="https://github.com/{{example.meta_data.repo}}">{{example.meta_data.repo}}</a>
                 </li>
-                <li>Binary Hash: {{meta.sha}}</li>
+                <li>Binary Hash: {{example.meta_data.sha}}</li>
             </ul>
         </ng-accordion-entry>
         <ng-accordion-entry id="summary" name="Metric Summary" default-active="true">

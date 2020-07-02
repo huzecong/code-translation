@@ -21,7 +21,7 @@ from cotra.parse import LexToken, Lexer
 
 class Args(Arguments):
     test_file: str = "test_output.pkl"
-    output_dir: str = "."
+    output_dir: str = "eval-webapp/application/static/data/"
 
 
 T = TypeVar('T')
@@ -862,7 +862,7 @@ def main():
         [[system.name, name] for name, system in name_map.items()])
     print(name_table.to_str())
 
-    for file_name, max_size in [("eval-webapp/application/static/data/eval-test", 100)]:  # , ("eval", len(data.src_data))]:
+    for file_name, max_size in [("eval-small", 100), ("eval", len(data.src_data))]:
         # exporter = HTMLExporter(os.path.join(args.output_dir, file_name + ".html"), data.names)
         exporter = JSONExporter(os.path.join(args.output_dir, file_name + ".json"), Stats.METRICS, Evaluator.SYSTEMS)
         evaluator = Evaluator(exporter=exporter)

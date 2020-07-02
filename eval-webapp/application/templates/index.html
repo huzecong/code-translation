@@ -32,7 +32,15 @@
 <div class="ui top fixed menu">
     <div class="header item"><a href="#">Code Translation Eval</a></div>
     <a class="item" ng-repeat="link in links" ng-href="#!{{link.url}}"
-       ng-class="{active: $route.current.activeTab == link.id}">{{link.name}}</a>
+       ng-class="{active: $route.current.activeTab === link.id}">{{link.name}}</a>
+    <div class="right item"
+         ng-style="{'visibility': ($route.current.activeTab === 'compare' || $route.current.activeTab === 'example') ? 'visible' : 'hidden'}">
+        <!-- use visibility instead of ng-if to prevent changes in navbar height -->
+        <div class="ui toggle checkbox">
+            <input type="checkbox" name="oracleVar" ng-model="showOracleVar" ng-change="updateVarName()">
+            <label>Oracle Var</label>
+        </div>
+    </div>
 </div>
 <div class="ui container top-margin"></div>
 <div class="main">

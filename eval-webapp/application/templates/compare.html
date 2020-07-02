@@ -1,0 +1,156 @@
+<style>
+    @media screen and (min-width: 768px) {
+        div.main > .container {
+            max-width: calc(100vw - 100px) !important;
+            min-width: calc(100vw - 100px) !important;
+        }
+    }
+</style>
+<div id="compare" class="ui vertical segment" ng-controller="CompareCtrl">
+    <h2 class="ui dividing header">Compare</h2>
+
+    <div class="ui grid">
+        <div class="seven wide column" ng-repeat-start="n in ['A', 'B']">
+            <div id="system-dropdown-{{n}}" class="ui fluid selection dropdown">
+                <input type="hidden" name="system-{{n}}">
+                <i class="dropdown icon"></i>
+                <div class="default text">Select System {{n}}...</div>
+                <div class="menu">
+                    <div class="item" ng-repeat="system in systems" data-value="{{system.key}}">
+                        {{system.name}}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="two wide column" ng-repeat-end ng-if="$index == 0" style="display: flex; justify-content: center">
+            <button class="ui icon basic button" ng-click="swapSelection()">
+                <i class="exchange icon"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="ui icon error message" ng-if="!validSelection()">
+        <i class="ban icon"></i>
+        <div class="content">
+            <div class="header">Invalid selection</div>
+            <p>Please select two different systems to compare against each other.</p>
+        </div>
+    </div>
+
+    <div class="ui segment" ng-if="validSelection()">
+        <div style="display: flex; justify-content: space-between; vertical-align: bottom">
+            <p style="margin-bottom: 0;">
+                Filter examples where <b>{{selectedSystem[0].name}}</b> performs better than
+                <b>{{selectedSystem[1].name}}</b> in:
+            </p>
+            <div class="ui tiny statistic" style="margin-top: 0; margin-bottom: 10px;">
+                <div class="value">{{filteredExamples.length}}</div>
+                <div class="label">Examples</div>
+            </div>
+        </div>
+        <div id="metric-dropdown" class="ui fluid multiple selection dropdown">
+            <input type="hidden" name="metrics">
+            <i class="dropdown icon"></i>
+            <div class="default text">Select Metrics...</div>
+            <div class="menu">
+                <div class="item" ng-repeat="metric in metrics" data-value="{{metric.key}}">
+                    <i ng-if="metric.higherIsBetter === true" class="green icon sort up"></i>
+                    <i ng-if="metric.higherIsBetter === false" class="red icon sort down"></i>
+                    <span class="description">
+                                <a ng-repeat="n in ['L', 'R']"
+                                   class="ui small label {{metricDropdownColor(metric, $index)}}">
+                                    {{n}}
+                                    <div class="detail">{{metric.format(metricValues[$index][metric.key])}}</div>
+                                </a>
+                            </span>
+                    <span class="text">{{metric.name}}</span>
+                </div>
+            </div>
+        </div>
+
+        <table class="ui celled padded table">
+            <thead>
+            <tr>
+                <th colspan="{{pagination.examplesPerPage}}">
+                    <div class="ui left floated menu">
+                        <a class="icon item"
+                           ng-click="!pagination.isFirstExample() && pagination.prevExample()"
+                           ng-class="{'disabled': pagination.isFirstExample()}">
+                            <i class="left arrow icon"></i>
+                        </a>
+                        <a class="icon item"
+                           ng-click="!pagination.isLastExample() && pagination.nextExample()"
+                           ng-class="{'disabled': pagination.isLastExample()}">
+                            <i class="right arrow icon"></i>
+                        </a>
+                    </div>
+                    <div class="ui right floated pagination menu">
+                        <a class="icon item"
+                           ng-click="!pagination.isFirstPage() && (pagination.currentPage = pagination.currentPage - 1)"
+                           ng-class="{'disabled': pagination.isFirstPage()}">
+                            <i class="left chevron icon"></i>
+                        </a>
+                        <a class="disabled item" ng-if="pagination.displayPageRange[0] !== 0">...</a>
+                        <a class="item" ng-repeat="page in pagination.displayPageRange"
+                           ng-class="{'active': pagination.currentPage === page}"
+                           ng-click="pagination.currentPage = page">{{page + 1}}</a>
+                        <a class="disabled item"
+                           ng-if="pagination.displayPageRange[pagination.displayPageRange.length - 1] !== pagination.pages.length - 1">...</a>
+                        <a class="icon item"
+                           ng-click="!pagination.isLastPage() && (pagination.currentPage = pagination.currentPage + 1)"
+                           ng-class="{'disabled': pagination.isLastPage()}">
+                            <i class="right chevron icon"></i>
+                        </a>
+                    </div>
+                </th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td ng-repeat="example in pagination.pages[pagination.currentPage]"
+                    class="selectable center aligned" ng-class="{'active': pagination.currentIndex === $index}"
+                    ng-click="pagination.currentIndex = $index"><a>{{example.index}}</a></td>
+            </tr>
+            </tbody>
+        </table>
+
+        <ng-accordion id="compare-example" exclusive="false" default-active="true">
+            <ng-accordion-entry id="metadata" name="Metadata" default-active="true">
+                <ul>
+                    <li>Repository:
+                        <a href="https://github.com/{{example.meta_data.repo}}">{{example.meta_data.repo}}</a>
+                    </li>
+                    <li>Binary Hash: {{example.meta_data.sha}}</li>
+                </ul>
+            </ng-accordion-entry>
+            <ng-accordion-entry id="metrics" name="Example Metrics" default-active="true">
+                <ng-metric-table metrics="selectedMetrics" names="exampleSystemNames"
+                                 exclude-value="[false, false, true]"
+                                 values="exampleMetricValues" align="center"></ng-metric-table>
+            </ng-accordion-entry>
+            <ng-accordion-entry id="code" name="System Output">
+                <div class="ui internally celled grid">
+                    <div class="row">
+                        <div class="eight wide column">
+                            <h4>Decompiled (source)</h4>
+                            <ng-prism id="source-code" language="c"
+                                      code="example.predictions.decompiled.code" var-map="example.var_map"></ng-prism>
+                        </div>
+                        <div class="eight wide column">
+                            <h4>Target (Ground truth)</h4>
+                            <ng-prism id="target-code" language="c" code="example.target.code"></ng-prism>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="eight wide column" ng-repeat="n in ['A', 'B']">
+                            <h4>{{selectedSystem[$index].name}}</h4>
+                            <ng-hypothesis data="example.predictions[selectedKey[$index]]" target="example.target"
+                                           metrics="exampleMetrics"
+                                           var-map="selectedSystem[$index].use_var_map ? example.var_map : undefined"></ng-hypothesis>
+                        </div>
+                    </div>
+                </div>
+            </ng-accordion-entry>
+        </ng-accordion>
+    </div>
+</div>

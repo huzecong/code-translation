@@ -1,5 +1,60 @@
 'use strict';
 
+class Metric {
+    constructor(metricJson) {
+        this.key = metricJson.key;
+        this.name = metricJson.name;
+        this.higherIsBetter = metricJson.higher_is_better;
+        this.formatter = metricJson.formatter || {};
+        this.displayInSummary = metricJson.display_in_summary;
+        this.displayInExample = metricJson.display_in_example;
+    }
+
+    toValue(value) { return value; }
+
+    compare(lhs, rhs) {  // returns (lhs < rhs), where < points towards the better metric
+        const l = this.toValue(lhs), r = this.toValue(rhs);
+        if (this.higherIsBetter === true) return r - l;
+        if (this.higherIsBetter === false) return l - r;
+    }
+
+    difference(lhs, rhs) { return lhs - rhs; }
+}
+
+class IntMetric extends Metric {
+    format(value) { return value.toString(); }
+}
+
+class FloatMetric extends Metric {
+    format(value) {
+        if (this.formatter.fixed !== undefined) value = value.toFixed(this.formatter.fixed);
+        return value.toString();
+    }
+}
+
+class PortionMetric extends Metric {
+    format(value) {
+        return value.correct + " / " + value.total;
+    }
+
+    // toValue(value) { return value.correct / value.total; }
+    toValue(value) { return value.correct; }
+
+    difference(lhs, rhs) {
+        return {
+            correct: lhs.correct - rhs.correct,
+            total: Math.max(lhs.total, rhs.total),
+        };
+    }
+}
+
+class ConfusionMatMetric extends Metric {
+    format(value) {
+        const tp = value.true_positive, fp = value.false_positive, fn = value.false_negative;
+        return "P: " + (tp + " / " + (tp + fp)) + ", R: " + (tp + " / " + (tp + fn));
+    }
+}
+
 let App = angular.module('App', [
     'ngRoute',
     'ngSanitize',
@@ -24,6 +79,7 @@ let App = angular.module('App', [
             .when('/compare', {
                 controller: "CompareCtrl",
                 templateUrl: "compare.html",
+                activeTab: "compare",
             })
             .otherwise({
                 redirectTo: '/summary',
@@ -84,43 +140,14 @@ App.directive('ngCheck', function () {
     };
 });
 
-App.controller('MetricTableCtrl', ['$scope', function ($scope) {
-    function updateTable() {
-        $scope.formattedValues = [];
-        $scope.cellClasses = [];
-        for (const metric of $scope.metrics) {
-            let rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
-            let rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
-            let rowClasses = [];
-            let bestValue = null, worstValue = null;
-            if (metric.higherIsBetter === true) {
-                bestValue = Math.max(...rowValues);
-                worstValue = Math.min(...rowValues);
-            } else if (metric.higherIsBetter === false) {
-                bestValue = Math.min(...rowValues);
-                worstValue = Math.max(...rowValues);
-            }
-            for (let value of rowValues) {
-                let classes = [];
-                if (value === bestValue) classes.push("positive");
-                else if (value === worstValue) classes.push("negative");
-                if ($scope.align) classes.push($scope.align, "aligned");
-                rowClasses.push(classes.join(" "));
-            }
-            $scope.formattedValues.push(rowFormattedValues);
-            $scope.cellClasses.push(rowClasses);
-        }
-    }
-
-    $scope.$watch("values", updateTable);
-}]).directive('ngMetricTable', function () {
+App.directive('ngMetricTable', function () {
     return {
-        controller: 'MetricTableCtrl',
         restrict: 'E',
         scope: {
             values: "=",
             metrics: "=",
             names: "=",
+            excludeValue: "=?",
             align: "@?",
         },
         template: `
@@ -144,6 +171,50 @@ App.controller('MetricTableCtrl', ['$scope', function ($scope) {
                 </tbody>
             </table>
         `,
+        link: function ($scope) {
+            function updateTable() {
+                if ($scope.names === undefined || $scope.metrics === undefined || $scope.values === undefined) return;
+                if (angular.isUndefined($scope.excludeValue))
+                    $scope.excludeValue = $scope.names.map(_ => false);
+                $scope.formattedValues = [];
+                $scope.cellClasses = [];
+                for (const metric of $scope.metrics) {
+                    let rowValues = null;
+                    let rowAccountedValues = null;
+                    let rowFormattedValues = null;
+                    try {
+                        rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
+                        rowAccountedValues = rowValues.filter((_, i) => !$scope.excludeValue[i]);
+                        rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
+                    } catch (e) {
+                        console.log($scope.values);
+                    }
+                    let rowClasses = [];
+                    let bestValue = null, worstValue = null;
+                    if (metric.higherIsBetter === true) {
+                        bestValue = Math.max(...rowAccountedValues);
+                        worstValue = Math.min(...rowAccountedValues);
+                    } else if (metric.higherIsBetter === false) {
+                        bestValue = Math.min(...rowAccountedValues);
+                        worstValue = Math.max(...rowAccountedValues);
+                    }
+                    for (let idx = 0; idx < rowValues.length; ++idx) {
+                        const value = rowValues[idx];
+                        let classes = [];
+                        if (!$scope.excludeValue[idx]) {
+                            if (value === bestValue) classes.push("positive");
+                            else if (value === worstValue) classes.push("negative");
+                        }
+                        if ($scope.align) classes.push($scope.align, "aligned");
+                        rowClasses.push(classes.join(" "));
+                    }
+                    $scope.formattedValues.push(rowFormattedValues);
+                    $scope.cellClasses.push(rowClasses);
+                }
+            }
+
+            $scope.$watchGroup(["names", "metrics", "values"], updateTable);
+        },
     };
 });
 
@@ -244,54 +315,6 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
     };
     let _persistence = {};
 
-    class Metric {
-        constructor(metricJson) {
-            this.key = metricJson.key;
-            this.name = metricJson.name;
-            this.higherIsBetter = metricJson.higher_is_better;
-            this.formatter = metricJson.formatter || {};
-            this.displayInSummary = metricJson.display_in_summary;
-            this.displayInExample = metricJson.display_in_example;
-        }
-
-        toValue(value) { return value; }
-
-        difference(lhs, rhs) { return lhs - rhs; }
-    }
-
-    class IntMetric extends Metric {
-        format(value) { return value.toString(); }
-    }
-
-    class FloatMetric extends Metric {
-        format(value) {
-            if (this.formatter.fixed !== undefined) value = value.toFixed(this.formatter.fixed);
-            return value.toString();
-        }
-    }
-
-    class PortionMetric extends Metric {
-        format(value) {
-            return value.correct + " / " + value.total;
-        }
-
-        toValue(value) { return value.correct / value.total; }
-
-        difference(lhs, rhs) {
-            return {
-                correct: lhs.correct - rhs.correct,
-                total: lhs.total - rhs.total,
-            };
-        }
-    }
-
-    class ConfusionMatMetric extends Metric {
-        format(value) {
-            const tp = value.true_positive, fp = value.false_positive, fn = value.false_negative;
-            return "P: " + (tp + " / " + (tp + fp)) + ", R: " + (tp + " / " + (tp + fn));
-        }
-    }
-
     const metricClass = {
         int: IntMetric,
         float: FloatMetric,
@@ -299,7 +322,7 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         confusion_mat: ConfusionMatMetric,
     };
 
-    $http.get("/static/data/eval-test.json").then(function (response) {
+    $http.get("/static/data/eval.json").then(response => {
         state.examples = response.data.examples;
         state.metrics = [];
         for (const metric of response.data.metrics)
@@ -309,23 +332,14 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
     });
 
     return {
-        getExample: function (idx) {
-            return state.examples[idx];
-        },
-        getMetrics: function () {
-            return state.metrics;
-        },
-        getSystems: function () {
-            return state.systems;
-        },
-        getCount: function () {
-            return state.examples.length;
-        },
-        isReady: function () {
-            return state.ready;
-        },
+        getAllExamples: () => state.examples,
+        getExample: (idx) => state.examples[idx],
+        getMetrics: () => state.metrics,
+        getSystems: () => state.systems,
+        getCount: () => state.examples.length,
+        isReady: () => state.ready,
         lastIndex: 1,
-        getPersistenceState: function (id) {
+        getPersistenceState: (id) => {
             let obj = _persistence[id];
             if (obj === undefined)
                 obj = _persistence[id] = {};
@@ -364,19 +378,26 @@ App.controller('MainCtrl', ['State', '$route', '$scope', '$timeout', function (S
         if (newVal !== oldVal && newVal) {
             $("#loading-message").transition({
                 animation: "fade",
-                onComplete: function () {
-                    $("#load-success-message").transition({
-                        animation: "fade",
-                        onComplete: function () {
-                            $timeout(function () {
-                                $(".success.message").transition("fade");
-                            }, 1500);
-                        },
-                    });
-                },
+                onComplete: () => $("#load-success-message").transition({
+                    animation: "fade",
+                    onComplete: () => $timeout(() => $(".success.message").transition("fade"), 1500),
+                }),
             });
         }
     });
+
+    $scope.showOracleVar = false;
+    $scope.updateVarName = function () {
+        if ($scope.showOracleVar) {
+            $(".decompiled-var").addClass("hide");
+            $(".oracle-var").removeClass("hide");
+        } else {
+            $(".decompiled-var").removeClass("hide");
+            $(".oracle-var").addClass("hide");
+        }
+    };
+    // Update variable names after each digest cycle, so the code is fully-loaded.
+    $scope.$watch(() => $scope.$$postDigest($scope.updateVarName));
 }]);
 
 App.controller('SummaryCtrl', ['State', '$scope', function (State, $scope) {
@@ -426,38 +447,215 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
             if (idx !== null) {
                 $scope.gotoInputError = false;
                 // Delayed switch.
-                timer = $timeout(function () {
-                    $scope.switchExample(idx);
-                }, 500);
+                timer = $timeout(() => $scope.switchExample(idx), 500);
             } else {
                 $scope.gotoInputError = true;
             }
         };
     })();
 
-    $scope.showOracleVar = false;
-    $scope.updateVarName = function () {
-        if ($scope.showOracleVar) {
-            $(".decompiled-var").addClass("hide");
-            $(".oracle-var").removeClass("hide");
-        } else {
-            $(".decompiled-var").removeClass("hide");
-            $(".oracle-var").addClass("hide");
-        }
-    };
-
     let idx = validateIndex($routeParams.id) || State.lastIndex;
     $scope.switchExample(idx);
-    // Update variable names after each digest cycle, so the code is fully-loaded.
-    $scope.$watch(function () {
-        $scope.$$postDigest($scope.updateVarName);
-    });
 }]);
 
-App.controller('CompareCtrl', ['State', '$scope', '$timeout', function (State, $scope, $timeout) {
-    $scope.$$postDigest(function () {
-        $(".ui.dropdown").dropdown({
-            values: [],
+App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
+    function fromKeys(array, keys) {
+        return keys.map(key => array.find(elem => elem.key === key));
+    }
+
+    $scope.selectedKey = [null, null];
+    $scope.selectedSystem = [null, null];
+    $scope.systems = State.getSystems();
+    $scope.metrics = State.getMetrics().filter(metric => metric.displayInSummary && metric.higherIsBetter !== null);
+
+    $scope.selectedMetricKeys = [];
+    $scope.selectedMetrics = [];
+    $scope.filteredExamples = State.getAllExamples();
+    $scope.example = null;
+    $scope.exampleMetrics = State.getMetrics().filter(metric => metric.displayInExample);
+
+
+    /* Persistent state */
+    let persistentState = State.getPersistenceState("_compare_ctrl");
+
+    function loadPersistentState() {
+        if (angular.isDefined(persistentState.selectedKey)) {
+            $scope.selectedKey = persistentState.selectedKey;
+            $scope.selectedSystem = fromKeys($scope.systems, persistentState.selectedKey);
+            $scope.selectedMetricKeys = persistentState.selectedMetricKeys;
+            $scope.selectedMetrics = fromKeys($scope.metrics, persistentState.selectedMetricKeys);
+            $scope.pagination.currentPage = persistentState.currentPage;
+            $scope.pagination.currentIndex = persistentState.currentIndex;
+        }
+    }
+
+    function updatePersistentState() {
+        persistentState.selectedKey = $scope.selectedKey;
+        persistentState.selectedMetricKeys = $scope.selectedMetricKeys;
+        persistentState.currentPage = $scope.pagination.currentPage;
+        persistentState.currentIndex = $scope.pagination.currentIndex;
+    }
+
+
+    /* System selection */
+    $scope.validSelection = function () {
+        const [a, b] = $scope.selectedKey;
+        return a !== null && b !== null && a !== b;
+    };
+    $scope.swapSelection = function () {
+        const [a, b] = $scope.selectedKey;
+        // Swap the scope variables here so we don't trigger a change for `validSelection()`.
+        // If we don't do this, we'll trigger two digest cycles, each produced by a `dropdown` call. The intermediate
+        // state is an invalid state because two choices will be the same.
+        $scope.selectedKey = [b, a];
+        $scope.selectedSystem = [$scope.selectedSystem[1], $scope.selectedSystem[0]];
+        $scope.$$postDigest(() => {
+            // This has to run after the digest cycle, because we call `$apply` within `onChange`.
+            $("#system-dropdown-A").dropdown("set selected", b);
+            $("#system-dropdown-B").dropdown("set selected", a);
         });
+    };
+    $scope.$watchCollection("selectedSystem", function () {
+        if (!$scope.validSelection()) return;
+        const [a, b] = $scope.selectedSystem;
+        $scope.systemNames = [a.name, b.name];
+        $scope.exampleSystemNames = $scope.systemNames.concat(['∆Diff']);
+        $scope.metricValues = [a.metrics, b.metrics];
+        updateFilteredExamples();
+        updatePersistentState();
+    });
+
+
+    /* Example pagination */
+    $scope.pagination = {
+        examplesPerPage: 10,
+        maxNextPages: 4,
+        pages: [],
+        totalExamples: $scope.filteredExamples.length,
+        currentPage: 0,
+        currentIndex: 0,
+        displayPageRange: [],
+        isFirstPage: () => $scope.pagination.currentPage === 0,
+        isLastPage: () => $scope.pagination.currentPage + 1 === $scope.pagination.pages.length,
+        isFirstExample: () => $scope.pagination.isFirstPage() && $scope.pagination.currentIndex === 0,
+        isLastExample: () => $scope.pagination.isLastPage() &&
+            $scope.pagination.currentIndex + 1 === $scope.pagination.pages[$scope.pagination.pages.length - 1].length,
+        prevExample: () => {
+            if (--$scope.pagination.currentIndex < 0)
+                $scope.pagination.currentIndex = $scope.pagination.pages[--$scope.pagination.currentPage].length - 1;
+        },
+        nextExample: () => {
+            if (++$scope.pagination.currentIndex >= $scope.pagination.pages[$scope.pagination.currentPage].length) {
+                ++$scope.pagination.currentPage;
+                $scope.pagination.currentIndex = 0;
+            }
+        },
+    };
+
+    function createPagination() {
+        let pagination = $scope.pagination;
+        const examplesPerPage = pagination.examplesPerPage;
+        pagination.totalExamples = $scope.filteredExamples.length;
+        pagination.pages = [];
+        for (let idx = 0; idx < pagination.totalExamples; idx += examplesPerPage)
+            pagination.pages.push($scope.filteredExamples.slice(idx, idx + examplesPerPage));
+        pagination.currentPage = 0;
+        pagination.currentIndex = 0;
+    }
+
+    createPagination();
+
+
+    /* Example-related logic */
+    function updateFilteredExamples() {
+        const [a, b] = $scope.selectedKey;
+        const cmps = State.getAllExamples().map(example => {
+            return $scope.selectedMetrics.map(metric => metric.compare(
+                example.predictions[a].metrics[metric.key], example.predictions[b].metrics[metric.key]));
+        });
+        let indices = [...Array(State.getCount()).keys()].filter(idx => cmps[idx].every(x => x < 0));
+        // Sort with the comparisons as multiple keywords.
+        indices.sort((a, b) => {
+            for (let idx in $scope.selectedMetrics)
+                if (cmps[a][idx] !== cmps[b][idx]) return cmps[a][idx] - cmps[b][idx];
+            return 0;
+        });
+        const allExamples = State.getAllExamples();
+        $scope.filteredExamples = indices.map(idx => allExamples[idx]);
+        createPagination();
+        updateExample();
+    }
+
+    function updateExample() {
+        if (!$scope.validSelection()) return;
+
+        const pagination = $scope.pagination;
+        if (pagination.currentIndex >= pagination.pages[pagination.currentPage].length)
+            pagination.currentIndex = pagination.pages[pagination.currentPage].length - 1;
+        $scope.example = pagination.pages[pagination.currentPage][pagination.currentIndex];
+        const left = Math.max(0, pagination.currentPage - pagination.maxNextPages);
+        const right = Math.min(pagination.pages.length - 1, pagination.currentPage + pagination.maxNextPages);
+        pagination.displayPageRange = [...Array(right - left + 1).keys()].map(x => x + left);
+        updatePersistentState();
+
+        const [a, b] = $scope.exampleMetricValues =
+            $scope.selectedKey.map(key => $scope.example.predictions[key].metrics);
+        // Compute metric difference.
+        $scope.exampleMetricValues.push(Object.fromEntries($scope.selectedMetrics.map(
+            metric => [metric.key, metric.difference(a[metric.key], b[metric.key])])));
+    }
+
+    updateExample();
+    $scope.$watchGroup(["pagination.currentPage", "pagination.currentIndex"], updateExample);
+
+
+    $scope.metricDropdownColor = function (metric, $index) {
+        const cmp = metric.compare($scope.metricValues[0][metric.key], $scope.metricValues[1][metric.key]);
+        let colors = ["red", "red"];
+        if (cmp <= 0) colors[0] = "green";
+        if (cmp >= 0) colors[1] = "green";
+        return colors[$index];
+    };
+
+    $scope.$watchCollection("selectedMetrics", updateFilteredExamples);
+
+    $scope.$watch("validSelection()", function (newValue, oldValue) {
+        // Whenever `validSelection` changes from false to true, the main section of the page is reconstructed, so we
+        // have to initialize the dropdown again.
+        if (oldValue === false || newValue === true) {
+            // Initialize after the digest cycle, when the dropdown is added to the DOM.
+            $scope.$$postDigest(() => {
+                const $metricDropdown = $("#metric-dropdown");
+                $metricDropdown.dropdown({
+                    onChange: (value) => $scope.$apply(() => {
+                        // console.log("change", value);
+                        const metricKeys = value.split(",");
+                        $scope.selectedMetricKeys = metricKeys;
+                        $scope.selectedMetrics = fromKeys($scope.metrics, metricKeys);
+                    }),
+                    // onAdd: (value) => console.log("add", value),
+                    // onRemove: (value) => console.log("remove", value),
+                });
+                if ($scope.selectedMetricKeys.length > 0)
+                    $metricDropdown.dropdown("set exactly", $scope.selectedMetricKeys);
+            });
+        }
+    });
+
+
+    loadPersistentState();
+    $scope.$$postDigest(function () {
+        for (let idx in [0, 1]) {
+            const n = ["A", "B"][idx];
+            const $dropdown = $("#system-dropdown-" + n);
+            $dropdown.dropdown({
+                onChange: (value) => $scope.$apply(() => {
+                    $scope.selectedKey[idx] = value;
+                    $scope.selectedSystem[idx] = $scope.systems.find(system => system.key === value);
+                })
+            });
+            if ($scope.selectedKey[idx] !== null)
+                $dropdown.dropdown("set selected", $scope.selectedKey[idx]);
+        }
     });
 }]);
