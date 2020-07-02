@@ -322,7 +322,7 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         confusion_mat: ConfusionMatMetric,
     };
 
-    $http.get("/static/data/eval.json").then(response => {
+    $http.get("static/data/eval.json").then(response => {
         state.examples = response.data.examples;
         state.metrics = [];
         for (const metric of response.data.metrics)

@@ -128,26 +128,26 @@
                                  exclude-value="[false, false, true]"
                                  values="exampleMetricValues" align="center"></ng-metric-table>
             </ng-accordion-entry>
-            <ng-accordion-entry id="code" name="System Output">
+            <ng-accordion-entry id="src-tgt" name="Source & Target">
                 <div class="ui internally celled grid">
-                    <div class="row">
-                        <div class="eight wide column">
-                            <h4>Decompiled (source)</h4>
-                            <ng-prism id="source-code" language="c"
-                                      code="example.predictions.decompiled.code" var-map="example.var_map"></ng-prism>
-                        </div>
-                        <div class="eight wide column">
-                            <h4>Target (Ground truth)</h4>
-                            <ng-prism id="target-code" language="c" code="example.target.code"></ng-prism>
-                        </div>
+                    <div class="eight wide column">
+                        <h4>Source (Decompiled code)</h4>
+                        <ng-prism id="source-code" language="c"
+                                  code="example.predictions.decompiled.code" var-map="example.var_map"></ng-prism>
                     </div>
-                    <div class="row">
-                        <div class="eight wide column" ng-repeat="n in ['A', 'B']">
-                            <h4>{{selectedSystem[$index].name}}</h4>
-                            <ng-hypothesis data="example.predictions[selectedKey[$index]]" target="example.target"
-                                           metrics="exampleMetrics"
-                                           var-map="selectedSystem[$index].use_var_map ? example.var_map : undefined"></ng-hypothesis>
-                        </div>
+                    <div class="eight wide column">
+                        <h4>Target (Ground truth)</h4>
+                        <ng-prism id="target-code" language="c" code="example.target.code"></ng-prism>
+                    </div>
+                </div>
+            </ng-accordion-entry>
+            <ng-accordion-entry id="predictions" name="System Output">
+                <div class="ui internally celled grid">
+                    <div class="eight wide column" ng-repeat="n in ['A', 'B']">
+                        <h4>{{selectedSystem[$index].name}}</h4>
+                        <ng-hypothesis data="example.predictions[selectedKey[$index]]" target="example.target"
+                                       metrics="exampleMetrics"
+                                       var-map="selectedSystem[$index].use_var_map ? example.var_map : undefined"></ng-hypothesis>
                     </div>
                 </div>
             </ng-accordion-entry>
