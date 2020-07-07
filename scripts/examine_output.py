@@ -167,32 +167,44 @@ def main():
     # names = args.hyp_names.split(",")
     # hyp_paths = args.hyp_files.split(",")
     # overlap_paths = args.overlap_score_files.split(",")
-    names = [
-        "Seq2seq-D",
-        "Seq2seq-O",
-        "Seq2seq-D+Finetune",
-        "Seq2seq-O+Finetune",
-        "TranX-O-Greedy",
-        "TranX-O-Beam5",
+    systems = [
+        # (name, is_finetune?)
+        ("Seq2seq-D", False),
+        ("Seq2seq-O", False),
+        ("Seq2seq-D+Finetune", True),
+        ("Seq2seq-O+Finetune", True),
+        ("TranX-O-Greedy", False),
+        ("TranX-O-Beam5", False),
+        ("TranX-t2t-D-Greedy", False),
+        ("TranX-t2t-O-Greedy", False),
+        ("TranX-t2t-O-Beam5", False),
+        ("TranX-t2t-D-Greedy+Finetune", False),
+        ("TranX-t2t-O-Greedy+Finetune", False),
     ]
-    tranx_model_name = ("model.sup.c.var_original.hidden256.embed128.action128.field64.type64.dropout0.3.lr0.001."
-                        "lr_decay0.5.beam_size15.vocab.pkl.tranx_data.seed19260817.bin")
+    names = [name for name, _ in systems]
+    tranx_model_name_1 = ("model.sup.c.var_original.hidden256.embed128.action128.field64.type64.dropout0.3.lr0.001."
+                          "lr_decay0.5.beam_size15.vocab.pkl.tranx_data.seed19260817.bin")
+    tranx_model_name_2 = "model.transformer.2.c.var_{varname}.input_action_seq.vocab.pkl.tranx_data_src_ast.bin"
+    tranx_model_name_3 = "model.transformer.finetune.c.var_{varname}.input_action_seq.vocab.pkl.train_extra.bin"
+    tranx_model_names = [  # (name, beam_size)
+        (tranx_model_name_1, 1),
+        (tranx_model_name_1, 5),
+        (tranx_model_name_2.format(varname="decompiled"), 1),
+        (tranx_model_name_2.format(varname="original"), 1),
+        (tranx_model_name_2.format(varname="original"), 5),
+        (tranx_model_name_3.format(varname="decompiled"), 1),
+        (tranx_model_name_3.format(varname="original"), 1),
+    ]
     hyp_paths = [
         "outputs_decomp_varname/test_default.hyp.orig",
         "outputs_orig_varname/test_default.hyp.orig",
         "outputs_decomp_varname_finetune/test_default.hyp.orig",
         "outputs_orig_varname_finetune/test_default.hyp.orig",
-        f"../tranX/decodes/c/{tranx_model_name}.test.beam_size1.max_time1000.decode.txt",
-        f"../tranX/decodes/c/{tranx_model_name}.test.beam_size5.max_time1000.decode.txt",
+        *[f"../tranX/decodes/c/{name}.test.beam_size{beam_size}.max_time1000.decode.txt"
+          for name, beam_size in tranx_model_names],
     ]
-    overlap_paths = [
-        "data/processed/overlap_test.txt",
-        "data/processed/overlap_test.txt",
-        "data/processed/overlap_extra_test.txt",
-        "data/processed/overlap_extra_test.txt",
-        "data/processed/overlap_test.txt",
-        "data/processed/overlap_test.txt",
-    ]
+    overlap_paths = ["data/processed/" + ("overlap_test.txt" if not is_finetune else "overlap_extra_test.txt")
+                     for _, is_finetune in systems]
     assert len(names) == len(hyp_paths)
     hyp_data = {}
     for name, hyp_path in zip(names, hyp_paths):

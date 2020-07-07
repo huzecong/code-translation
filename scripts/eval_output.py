@@ -650,9 +650,12 @@ class Evaluator:
         # System("tranx_d_beam5", "TranX-D-Beam5", "TranX + decompiler var names + beam width 5"),
         System("tranx_o_greedy", "TranX-O-Greedy", "TranX + oracle var names + greedy decoding"),
         System("tranx_o_beam5", "TranX-O-Beam5", "TranX + oracle var names + beam width 5"),
-        # System("tranx_d_greedy_ft", "TranX-D-Greedy +Finetune", "Finetuned TranX + decompiler var names + greedy decoding"),
+        System("tranx_t2t_d_greedy", "TranX-t2t-D-Greedy", "TranX tree2tree + decompiled var names + greedy decoding"),
+        System("tranx_t2t_o_greedy", "TranX-t2t-O-Greedy", "TranX tree2tree + oracle var names + greedy decoding"),
+        System("tranx_t2t_o_greedy", "TranX-t2t-O-Beam5", "TranX tree2tree + oracle var names + beam width 5"),
+        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D-Greedy +Finetune", "Finetuned TranX tree2tree + decompiler var names + greedy decoding"),
         # System("tranx_d_beam5_ft", "TranX-D-Beam5 +Finetune", "Finetuned TranX + decompiler var names + beam width 5"),
-        # System("tranx_o_greedy_ft", "TranX-O-Greedy +Finetune", "Finetuned TranX + oracle var names + greedy decoding"),
+        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O-Greedy +Finetune", "Finetuned TranX tree2tree + oracle var names + greedy decoding"),
         # System("tranx_o_beam5_ft", "TranX-O-Beam5 +Finetune", "Finetuned TranX + oracle var names + beam width 5"),
     ]
 
@@ -821,7 +824,7 @@ class Evaluator:
             stats.bleu4 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=4)
             stats.bleu8 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=8)
             stats.bleu4_no_var = tx.evals.corpus_bleu(references_no_var, self.hypotheses_no_var[name], max_order=4)
-            summary_table_cols.append([
+            summary_table_cols.append([name] + [
                 Stats.format(metric, getattr(stats, metric.key))
                 for metric in Stats.METRICS if metric.display_in_summary])
         summary_table_items: List[List[str]] = list(

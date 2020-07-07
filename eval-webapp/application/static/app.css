@@ -18,25 +18,6 @@ div.main {
     padding-top: 20px;
 }
 
-@media screen and (max-width: 767px) {
-    div.main > .container {
-        max-width: calc(100vw - 50px) !important;
-    }
-}
-
-@media screen and (min-width: 768px) and (max-width: 991px) {
-    div.main > .container {
-        max-width: calc(100vw - 220px) !important;
-    }
-}
-
-@media screen and (min-width: 992px) {
-    div.main > .container {
-        max-width: calc(100vw - 300px) !important;
-    }
-}
-
-
 #example {
     overflow-wrap: break-word;
 }
