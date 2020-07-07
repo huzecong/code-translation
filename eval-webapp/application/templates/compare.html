@@ -1,9 +1,10 @@
 <div id="compare" class="ui vertical segment" ng-controller="CompareCtrl">
     <h2 class="ui dividing header">Compare</h2>
 
+    <p>Select two systems to compare:</p>
     <div class="ui grid">
         <div class="seven wide column" ng-repeat-start="n in ['A', 'B']">
-            <div id="system-dropdown-{{n}}" class="ui fluid selection dropdown">
+            <div id="system-dropdown-{{n}}" class="ui fluid selection dropdown higher-dropdown">
                 <input type="hidden" name="system-{{n}}">
                 <i class="dropdown icon"></i>
                 <div class="default text">Select System {{n}}...</div>
@@ -29,7 +30,7 @@
         </div>
     </div>
 
-    <div class="ui segment" ng-if="validSelection()">
+    <div class="ui segment" ng-show="validSelection()">
         <div style="display: flex; justify-content: space-between; vertical-align: bottom">
             <p style="margin-bottom: 0;">
                 Filter examples where <b>{{selectedSystem[0].name}}</b> performs better than
@@ -40,26 +41,28 @@
                 <div class="label">Examples</div>
             </div>
         </div>
-        <div id="metric-dropdown" class="ui fluid multiple selection dropdown">
+        <div id="metric-dropdown" class="ui fluid multiple selection dropdown higher-dropdown">
             <input type="hidden" name="metrics">
             <i class="dropdown icon"></i>
             <div class="default text">Select Metrics...</div>
             <div class="menu">
                 <div class="item" ng-repeat="metric in metrics" data-value="{{metric.key}}">
-                    <i ng-if="metric.higherIsBetter === true" class="green icon sort up"></i>
-                    <i ng-if="metric.higherIsBetter === false" class="red icon sort down"></i>
+                    <i ng-if="metric.higherIsBetter === true" class="green icon caret up"></i>
+                    <i ng-if="metric.higherIsBetter === false" class="red icon caret down"></i>
                     <span class="description">
-                                <a ng-repeat="n in ['L', 'R']"
-                                   class="ui small label {{metricDropdownColor(metric, $index)}}">
-                                    {{n}}
-                                    <div class="detail">{{metric.format(metricValues[$index][metric.key])}}</div>
-                                </a>
-                            </span>
+                        <a ng-repeat="n in ['L', 'R']"
+                           class="ui small label {{metricDropdownColor(metric, $index)}}">
+                            {{n}}
+                            <div class="detail">{{metric.format(metricValues[$index][metric.key])}}</div>
+                        </a>
+                    </span>
                     <span class="text">{{metric.name}}</span>
                 </div>
             </div>
         </div>
 
+        <div class="ui divider"></div>
+        <p>View filtered examples by index:</p>
         <table class="ui celled padded table">
             <thead>
             <tr>
@@ -87,7 +90,7 @@
                            ng-class="{'active': pagination.currentPage === page}"
                            ng-click="pagination.currentPage = page">{{page + 1}}</a>
                         <a class="disabled item"
-                           ng-if="pagination.displayPageRange[pagination.displayPageRange.length - 1] !== pagination.pages.length - 1">...</a>
+                           ng-if="pagination.displayPageRange.back() !== pagination.pages.length - 1">...</a>
                         <a class="icon item"
                            ng-click="!pagination.isLastPage() && (pagination.currentPage = pagination.currentPage + 1)"
                            ng-class="{'disabled': pagination.isLastPage()}">
@@ -106,7 +109,15 @@
             </tbody>
         </table>
 
-        <ng-accordion id="compare-example" exclusive="false" default-active="true">
+        <div class="ui icon warning message" ng-if="pagination.pages.length === 0">
+            <i class="times icon"></i>
+            <div class="content">
+                <div class="header">No example matched the filters</div>
+                <p>Consider removing some of the applied filters?</p>
+            </div>
+        </div>
+        <ng-accordion id="compare-example" exclusive="false" default-active="true"
+                      ng-if="pagination.pages.length > 0">
             <ng-accordion-entry id="metadata" name="Metadata" default-active="true">
                 <ul>
                     <li>Repository:

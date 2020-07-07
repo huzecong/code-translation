@@ -22,11 +22,27 @@ div.main {
     overflow-wrap: break-word;
 }
 
-#example .input {
-    width: 5em !important;
+#example .ui.rail .input {
+    width: 3.2em !important;
     display: block;
     margin: 0 auto 0.5rem !important;
+}
+
+#example .ui.rail .input input {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
     text-align: center;
+}
+
+/* Hide the arrows inside the number input */
+#example .ui.rail .input input::-webkit-outer-spin-button,
+#example .ui.rail .input input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+#example .ui.rail .input input[type=number] {
+    -moz-appearance: none;
 }
 
 #example .checkbox {
@@ -50,13 +66,17 @@ ng-prism pre code .oracle-var {
     margin-block-end: 4px;
 }
 
+.ui.selection.dropdown.higher-dropdown > .menu {
+    max-height: 300px;
+}
+
 
 /* Sticky table headers */
 .ui.definition.table thead tr:first-child > th:not(:first-child) {
     position: -webkit-sticky !important;
     position: sticky !important;
-    top: -20px;  /* to offset the 20px padding-top in .main */
-    margin-bottom: 41px;  /* offset for the default height of a row */
+    top: -20px; /* to offset the 20px padding-top in .main */
+    margin-bottom: 41px; /* offset for the default height of a row */
     z-index: 2;
     border-top: 1px solid rgba(34, 36, 38, 0.15);
 }

@@ -1,5 +1,10 @@
 'use strict';
 
+Array.prototype.back = function () {
+    if (this.length === 0) return undefined;
+    return this[this.length - 1];
+};
+
 class Metric {
     constructor(metricJson) {
         this.key = metricJson.key;
@@ -64,20 +69,14 @@ let App = angular.module('App', [
         $sanitizeProvider.addValidAttrs(["style"]);
         $routeProvider
             .when('/summary', {
-                controller: "SummaryCtrl",
                 templateUrl: "summary.html",
                 activeTab: "summary",
             })
             .when('/example/:id?', {
-                controller: "ExampleCtrl",
-                templateUrl: function (routeParams) {
-                    console.log("/example", routeParams);
-                    return "example.html";
-                },
+                templateUrl: "example.html",
                 activeTab: "example",
             })
             .when('/compare', {
-                controller: "CompareCtrl",
                 templateUrl: "compare.html",
                 activeTab: "compare",
             })
@@ -157,10 +156,14 @@ App.directive('ngMetricTable', function () {
                     <th class="center aligned" ng-repeat="x in names">{{x}}</th>
                 </tr></thead>
                 <tbody>
+                    <tr ng-if="metrics == false">
+                        <td></td>
+                        <td class="center aligned" colspan="{{values.length}}">No metrics selected</td>
+                    </tr>
                     <tr ng-repeat="metric in metrics" ng-init="rowIdx = $index">
                         <td>
-                            <i ng-if="metric.higherIsBetter === true" class="green icon sort up"></i>
-                            <i ng-if="metric.higherIsBetter === false" class="red icon sort down"></i>
+                            <i ng-if="metric.higherIsBetter === true" class="green icon caret up"></i>
+                            <i ng-if="metric.higherIsBetter === false" class="red icon caret down"></i>
                             {{metric.name}}
                         </td>
                         <td ng-repeat="value in formattedValues[rowIdx] track by $index" ng-init="colIdx = $index"
@@ -182,13 +185,9 @@ App.directive('ngMetricTable', function () {
                     let rowValues = null;
                     let rowAccountedValues = null;
                     let rowFormattedValues = null;
-                    try {
-                        rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
-                        rowAccountedValues = rowValues.filter((_, i) => !$scope.excludeValue[i]);
-                        rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
-                    } catch (e) {
-                        console.log($scope.values);
-                    }
+                    rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
+                    rowAccountedValues = rowValues.filter((_, i) => !$scope.excludeValue[i]);
+                    rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
                     let rowClasses = [];
                     let bestValue = null, worstValue = null;
                     if (metric.higherIsBetter === true) {
@@ -264,11 +263,9 @@ App.controller('AccordionCtrl', ['State', '$scope', '$element', function (State,
                     $scope.defaultActive = false;
                 if (angular.isUndefined($scope.exclusive))
                     $scope.exclusive = true;
-                $scope.$$postDigest(function () {
-                    $element.accordion({
-                        exclusive: $scope.exclusive,
-                    });
-                });
+                $scope.$$postDigest(() => $element.accordion({
+                    exclusive: $scope.exclusive,
+                }));
             }
         },
     };
@@ -432,7 +429,6 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
         // Compute everything that's needed to render this example.
         $scope.example = State.getExample(idx - 1);
         $scope.metricValues = $scope.systems.map(system => $scope.example.predictions[system.key].metrics);
-        console.log("Switched to example " + idx);
     };
     $scope.gotoInputError = false;
     $scope.updateGoto = (function () {
@@ -458,15 +454,15 @@ App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '
     $scope.switchExample(idx);
 }]);
 
-App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
+App.controller('CompareCtrl', ['State', '$scope', '$document', function (State, $scope, $document) {
     function fromKeys(array, keys) {
         return keys.map(key => array.find(elem => elem.key === key));
     }
 
-    $scope.selectedKey = [null, null];
-    $scope.selectedSystem = [null, null];
     $scope.systems = State.getSystems();
     $scope.metrics = State.getMetrics().filter(metric => metric.displayInSummary && metric.higherIsBetter !== null);
+    $scope.selectedKey = [$scope.systems[0].key, $scope.systems[1].key];
+    $scope.selectedSystem = fromKeys($scope.systems, $scope.selectedKey);
 
     $scope.selectedMetricKeys = [];
     $scope.selectedMetrics = [];
@@ -476,20 +472,11 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
 
 
     /* Persistent state */
+    let fullyLoaded = false;
     let persistentState = State.getPersistenceState("_compare_ctrl");
 
-    function loadPersistentState() {
-        if (angular.isDefined(persistentState.selectedKey)) {
-            $scope.selectedKey = persistentState.selectedKey;
-            $scope.selectedSystem = fromKeys($scope.systems, persistentState.selectedKey);
-            $scope.selectedMetricKeys = persistentState.selectedMetricKeys;
-            $scope.selectedMetrics = fromKeys($scope.metrics, persistentState.selectedMetricKeys);
-            $scope.pagination.currentPage = persistentState.currentPage;
-            $scope.pagination.currentIndex = persistentState.currentIndex;
-        }
-    }
-
     function updatePersistentState() {
+        if (!fullyLoaded) return;
         persistentState.selectedKey = $scope.selectedKey;
         persistentState.selectedMetricKeys = $scope.selectedMetricKeys;
         persistentState.currentPage = $scope.pagination.currentPage;
@@ -536,18 +523,22 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
         currentIndex: 0,
         displayPageRange: [],
         isFirstPage: () => $scope.pagination.currentPage === 0,
-        isLastPage: () => $scope.pagination.currentPage + 1 === $scope.pagination.pages.length,
+        isLastPage: () => $scope.pagination.currentPage + 1 >= $scope.pagination.pages.length,
         isFirstExample: () => $scope.pagination.isFirstPage() && $scope.pagination.currentIndex === 0,
+        // jshint ignore: start
         isLastExample: () => $scope.pagination.isLastPage() &&
-            $scope.pagination.currentIndex + 1 === $scope.pagination.pages[$scope.pagination.pages.length - 1].length,
+            $scope.pagination.currentIndex + 1 >= ($scope.pagination.pages.back()?.length ?? 0),
+        // jshint ignore: end
         prevExample: () => {
-            if (--$scope.pagination.currentIndex < 0)
-                $scope.pagination.currentIndex = $scope.pagination.pages[--$scope.pagination.currentPage].length - 1;
+            const pagination = $scope.pagination;
+            if (--pagination.currentIndex < 0)
+                pagination.currentIndex = pagination.pages[--pagination.currentPage].length - 1;
         },
         nextExample: () => {
-            if (++$scope.pagination.currentIndex >= $scope.pagination.pages[$scope.pagination.currentPage].length) {
-                ++$scope.pagination.currentPage;
-                $scope.pagination.currentIndex = 0;
+            const pagination = $scope.pagination;
+            if (++pagination.currentIndex >= pagination.pages[pagination.currentPage].length) {
+                ++pagination.currentPage;
+                pagination.currentIndex = 0;
             }
         },
     };
@@ -568,6 +559,8 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
 
     /* Example-related logic */
     function updateFilteredExamples() {
+        $scope.selectedMetrics = fromKeys($scope.metrics, $scope.selectedMetricKeys);
+        if (!$scope.validSelection()) return;
         const [a, b] = $scope.selectedKey;
         const cmps = State.getAllExamples().map(example => {
             return $scope.selectedMetrics.map(metric => metric.compare(
@@ -590,12 +583,17 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
         if (!$scope.validSelection()) return;
 
         const pagination = $scope.pagination;
-        if (pagination.currentIndex >= pagination.pages[pagination.currentPage].length)
-            pagination.currentIndex = pagination.pages[pagination.currentPage].length - 1;
-        $scope.example = pagination.pages[pagination.currentPage][pagination.currentIndex];
-        const left = Math.max(0, pagination.currentPage - pagination.maxNextPages);
-        const right = Math.min(pagination.pages.length - 1, pagination.currentPage + pagination.maxNextPages);
-        pagination.displayPageRange = [...Array(right - left + 1).keys()].map(x => x + left);
+        if (pagination.pages.length === 0) {
+            $scope.example = State.getAllExamples()[0];
+            pagination.displayPageRange = [];
+        } else {
+            if (pagination.currentIndex >= pagination.pages[pagination.currentPage].length)
+                pagination.currentIndex = pagination.pages[pagination.currentPage].length - 1;
+            $scope.example = pagination.pages[pagination.currentPage][pagination.currentIndex];
+            const left = Math.max(0, pagination.currentPage - pagination.maxNextPages);
+            const right = Math.min(pagination.pages.length - 1, pagination.currentPage + pagination.maxNextPages);
+            pagination.displayPageRange = [...Array(right - left + 1).keys()].map(x => x + left);
+        }
         updatePersistentState();
 
         const [a, b] = $scope.exampleMetricValues =
@@ -617,36 +615,45 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
         return colors[$index];
     };
 
-    $scope.$watchCollection("selectedMetrics", updateFilteredExamples);
+    $scope.keyPressed = false;
+    $document.unbind('keydown');
+    $document.unbind('keyup');
+    $document.bind('keydown', (e) => {
+        if ($scope.keyPressed) return;
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        const pagination = $scope.pagination;
+        $scope.$apply(() => {
+            if (e.key === "ArrowLeft") {
+                if (!pagination.isFirstExample()) pagination.prevExample();
+            } else {
+                if (!pagination.isLastExample()) pagination.nextExample();
+            }
+        });
+        $scope.keyPressed = true;
+    });
+    $document.bind('keyup', (e) => {
+        $scope.keyPressed = false;
+    });
 
-    $scope.$watch("validSelection()", function (newValue, oldValue) {
-        // Whenever `validSelection` changes from false to true, the main section of the page is reconstructed, so we
-        // have to initialize the dropdown again.
-        if (oldValue === false || newValue === true) {
-            // Initialize after the digest cycle, when the dropdown is added to the DOM.
-            $scope.$$postDigest(() => {
-                const $metricDropdown = $("#metric-dropdown");
-                $metricDropdown.dropdown({
-                    onChange: (value) => $scope.$apply(() => {
-                        // console.log("change", value);
-                        const metricKeys = value.split(",");
-                        $scope.selectedMetricKeys = metricKeys;
-                        $scope.selectedMetrics = fromKeys($scope.metrics, metricKeys);
-                    }),
-                    // onAdd: (value) => console.log("add", value),
-                    // onRemove: (value) => console.log("remove", value),
-                });
-                if ($scope.selectedMetricKeys.length > 0)
-                    $metricDropdown.dropdown("set exactly", $scope.selectedMetricKeys);
-            });
-        }
+    $scope.$on('$destroy', function () {
+        $document.unbind('keydown');
+        $document.unbind('keyup');
     });
 
 
-    loadPersistentState();
+    // Load persistent state & initialize Semantic UI DOM elements.
+    if (angular.isDefined(persistentState.selectedKey)) {
+        $scope.selectedKey = persistentState.selectedKey;
+        $scope.selectedSystem = fromKeys($scope.systems, persistentState.selectedKey);
+        $scope.selectedMetricKeys = persistentState.selectedMetricKeys;
+        // Not done yet; pagination has to be restored after loading metrics.
+    } else {
+        // Nothing's saved, so we're done loading.
+        fullyLoaded = true;
+    }
     $scope.$$postDigest(function () {
-        for (let idx in [0, 1]) {
-            const n = ["A", "B"][idx];
+        // Initialize the system selection dropdowns.
+        ["A", "B"].forEach((n, idx) => {
             const $dropdown = $("#system-dropdown-" + n);
             $dropdown.dropdown({
                 onChange: (value) => $scope.$apply(() => {
@@ -656,6 +663,31 @@ App.controller('CompareCtrl', ['State', '$scope', function (State, $scope) {
             });
             if ($scope.selectedKey[idx] !== null)
                 $dropdown.dropdown("set selected", $scope.selectedKey[idx]);
+        });
+
+        // Initialize the metric selection dropdown.
+        const $metricDropdown = $("#metric-dropdown");
+        // Neither "set exactly" nor "set selected" preserves order when a list is passed. Thus, we simulate
+        // selecting one-by-one to manually maintain order.
+        for (let key of $scope.selectedMetricKeys)
+            $metricDropdown.dropdown("set selected", key);
+        updateFilteredExamples();
+        // Add `onChange` handler after we apply the initial changes.
+        $metricDropdown.dropdown({
+            onChange: (value) => $scope.$apply(() => {
+                $scope.selectedMetricKeys = value === "" ? [] : value.split(",");
+                updateFilteredExamples();
+            }),
+        });
+
+        if (angular.isDefined(persistentState.currentPage)) {
+            $scope.$apply(() => {
+                // Pagination is re-created every time metrics change. Wait until the metrics are fully loaded.
+                $scope.pagination.currentPage = persistentState.currentPage;
+                $scope.pagination.currentIndex = persistentState.currentIndex;
+                // Prevent updating persistent state before the pagination is restored.
+                fullyLoaded = true;
+            });
         }
     });
 }]);
