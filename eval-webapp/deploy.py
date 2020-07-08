@@ -17,8 +17,8 @@ def main():
         content = re.sub(r"\{- static_version -}", "deploy", content)
         with (deploy_dir / file.name).open("w") as f:
             f.write(content)
-    os.makedirs(deploy_dir / "static/data")
-    os.makedirs(deploy_dir / "static/favicon")
+    os.makedirs(deploy_dir / "static/data", exist_ok=True)
+    os.makedirs(deploy_dir / "static/favicon", exist_ok=True)
     shutil.copy2("application/static/favicon/favicon.png", deploy_dir / "static/favicon/favicon.png")
     shutil.copy2("application/static/app.css", deploy_dir / "static")
     shutil.copy2("application/static/app.js", deploy_dir / "static")

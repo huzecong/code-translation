@@ -262,7 +262,7 @@ class Stats:
         Metric("str_missing", "Missing string literals", type="portion", higher_is_better=False),
         Metric("str_redundant", "Redundant string literals", type="int", higher_is_better=False),
         # correct type changes from non-pointer to pointer
-        Metric("pointer_conversion", "Pointer conversion", type="confusion_mat")
+        Metric("pointer_conversion", "Pointer conversion", type="confusion_mat", higher_is_better=True)
     ]
     TYPE_MAP: Dict['Stats.MetricTypes', type] = {
         "int": int,
@@ -644,19 +644,20 @@ class Evaluator:
         System("decompiled", "Decompiled", "Code produced by the decompiler", use_var_map=True),
         System("seq2seq_d", "Seq2seq-D", "Seq2seq + decompiler var names"),
         System("seq2seq_o", "Seq2seq-O", "Seq2seq + oracle var names"),
-        System("seq2seq_d_ft", "Seq2seq-D +Finetune", "Finetuned Seq2seq + decompiler var names"),
-        System("seq2seq_o_ft", "Seq2seq-O +Finetune", "Finetuned Seq2seq + oracle var names"),
-        # System("tranx_d_greedy", "TranX-D-Greedy", "TranX + decompiler var names + greedy decoding"),
-        # System("tranx_d_beam5", "TranX-D-Beam5", "TranX + decompiler var names + beam width 5"),
-        System("tranx_o_greedy", "TranX-O-Greedy", "TranX + oracle var names + greedy decoding"),
-        System("tranx_o_beam5", "TranX-O-Beam5", "TranX + oracle var names + beam width 5"),
-        System("tranx_t2t_d_greedy", "TranX-t2t-D-Greedy", "TranX tree2tree + decompiled var names + greedy decoding"),
-        System("tranx_t2t_o_greedy", "TranX-t2t-O-Greedy", "TranX tree2tree + oracle var names + greedy decoding"),
-        System("tranx_t2t_o_greedy", "TranX-t2t-O-Beam5", "TranX tree2tree + oracle var names + beam width 5"),
-        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D-Greedy +Finetune", "Finetuned TranX tree2tree + decompiler var names + greedy decoding"),
-        # System("tranx_d_beam5_ft", "TranX-D-Beam5 +Finetune", "Finetuned TranX + decompiler var names + beam width 5"),
-        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O-Greedy +Finetune", "Finetuned TranX tree2tree + oracle var names + greedy decoding"),
-        # System("tranx_o_beam5_ft", "TranX-O-Beam5 +Finetune", "Finetuned TranX + oracle var names + beam width 5"),
+        System("seq2seq_d_ft", "Seq2seq-D +FT", "Fine-tuned Seq2seq + decompiler var names"),
+        System("seq2seq_o_ft", "Seq2seq-O +FT", "Fine-tuned Seq2seq + oracle var names"),
+        # System("tranx_d_greedy", "TranX-D Greedy", "TranX + decompiler var names + greedy decoding"),
+        # System("tranx_d_beam5", "TranX-D Beam5", "TranX + decompiler var names + beam width 5"),
+        System("tranx_o_greedy", "TranX-O Greedy", "TranX + oracle var names + greedy decoding"),
+        System("tranx_o_beam5", "TranX-O Beam5", "TranX + oracle var names + beam width 5"),
+        System("tranx_t2t_d_greedy", "TranX-t2t-D Greedy", "TranX tree2tree + decompiled var names + greedy decoding"),
+        # System("tranx_t2t_d_greedy", "TranX-t2t-D Beam5", "TranX tree2tree + decompiled var names + greedy decoding"),
+        System("tranx_t2t_o_greedy", "TranX-t2t-O Greedy", "TranX tree2tree + oracle var names + greedy decoding"),
+        System("tranx_t2t_o_greedy", "TranX-t2t-O Beam5", "TranX tree2tree + oracle var names + beam width 5"),
+        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D +FT Greedy", "Fine-tuned TranX tree2tree + decompiler var names + greedy decoding"),
+        System("tranx_t2t_d_beam5_ft", "TranX-t2t-D +FT Beam5", "Fine-tuned TranX + decompiler var names + beam width 5"),
+        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O +FT Greedy", "Fine-tuned TranX tree2tree + oracle var names + greedy decoding"),
+        System("tranx_t2t_o_beam5_ft", "TranX-t2t-O +FT Beam5", "Fine-tuned TranX + oracle var names + beam width 5"),
     ]
 
     def __init__(self, exporter: Optional[BaseExporter] = None):
@@ -851,7 +852,7 @@ class InputData(NamedTuple):
 
 def main():
     args = Args()
-    # flutes.register_ipython_excepthook()
+    flutes.register_ipython_excepthook()
     with open(args.test_file, "rb") as f:
         data = InputData(*pickle.load(f))
 
@@ -859,7 +860,9 @@ def main():
         os.makedirs(args.output_dir, exist_ok=True)
     print("Please check that the configured system names matches the collected data:")
     hypothesis_systems = [system for system in Evaluator.SYSTEMS if system.key != Evaluator.DECOMPILED_KEY]
-    name_map = {name: system for system, name in itertools.zip_longest(hypothesis_systems, data.names)}
+    if len(hypothesis_systems) != len(data.names):
+        raise ValueError("Number of systems in data does not match config")
+    name_map = {name: system for system, name in zip(hypothesis_systems, data.names)}
     name_table = Markdown.Table(
         [["System name", "Name from data"]] +
         [[system.name, name] for name, system in name_map.items()])

@@ -178,8 +178,10 @@ def main():
         ("TranX-t2t-D-Greedy", False),
         ("TranX-t2t-O-Greedy", False),
         ("TranX-t2t-O-Beam5", False),
-        ("TranX-t2t-D-Greedy+Finetune", False),
-        ("TranX-t2t-O-Greedy+Finetune", False),
+        ("TranX-t2t-D-Greedy+Finetune", True),
+        ("TranX-t2t-D-Beam5+Finetune", True),
+        ("TranX-t2t-O-Greedy+Finetune", True),
+        ("TranX-t2t-O-Beam5+Finetune", True),
     ]
     names = [name for name, _ in systems]
     tranx_model_name_1 = ("model.sup.c.var_original.hidden256.embed128.action128.field64.type64.dropout0.3.lr0.001."
@@ -193,7 +195,9 @@ def main():
         (tranx_model_name_2.format(varname="original"), 1),
         (tranx_model_name_2.format(varname="original"), 5),
         (tranx_model_name_3.format(varname="decompiled"), 1),
+        (tranx_model_name_3.format(varname="decompiled"), 5),
         (tranx_model_name_3.format(varname="original"), 1),
+        (tranx_model_name_3.format(varname="original"), 5),
     ]
     hyp_paths = [
         "outputs_decomp_varname/test_default.hyp.orig",

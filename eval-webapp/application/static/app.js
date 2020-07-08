@@ -58,6 +58,10 @@ class ConfusionMatMetric extends Metric {
         const tp = value.true_positive, fp = value.false_positive, fn = value.false_negative;
         return "P: " + (tp + " / " + (tp + fp)) + ", R: " + (tp + " / " + (tp + fn));
     }
+
+    toValue(value) {  // F1
+        return 2 * value.true_positive / Math.max(1, 2 * value.true_positive + value.false_positive + value.false_negative);
+    }
 }
 
 let App = angular.module('App', [
@@ -160,7 +164,7 @@ App.directive('ngMetricTable', function () {
                         <td></td>
                         <td class="center aligned" colspan="{{values.length}}">No metrics selected</td>
                     </tr>
-                    <tr ng-repeat="metric in metrics" ng-init="rowIdx = $index">
+                    <tr ng-repeat="metric in metrics track by $index" ng-init="rowIdx = $index">
                         <td>
                             <i ng-if="metric.higherIsBetter === true" class="green icon caret up"></i>
                             <i ng-if="metric.higherIsBetter === false" class="red icon caret down"></i>
@@ -175,28 +179,24 @@ App.directive('ngMetricTable', function () {
             </table>
         `,
         link: function ($scope) {
-            function updateTable() {
-                if ($scope.names === undefined || $scope.metrics === undefined || $scope.values === undefined) return;
+            $scope.$watchGroup(["names", "metrics", "values"], (newValues, oldValues) => {
+                if (newValues.some(angular.isUndefined)) return;
                 if (angular.isUndefined($scope.excludeValue))
                     $scope.excludeValue = $scope.names.map(_ => false);
                 $scope.formattedValues = [];
                 $scope.cellClasses = [];
                 for (const metric of $scope.metrics) {
-                    let rowValues = null;
-                    let rowAccountedValues = null;
-                    let rowFormattedValues = null;
-                    rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
-                    rowAccountedValues = rowValues.filter((_, i) => !$scope.excludeValue[i]);
-                    rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
-                    let rowClasses = [];
+                    const rowValues = $scope.values.map(dict => metric.toValue(dict[metric.key]));
+                    const rowAccountedValues = rowValues.filter((_, i) => !$scope.excludeValue[i]);
+                    const rowFormattedValues = $scope.values.map(dict => metric.format(dict[metric.key]));
                     let bestValue = null, worstValue = null;
-                    if (metric.higherIsBetter === true) {
+                    if (metric.higherIsBetter !== null) {
                         bestValue = Math.max(...rowAccountedValues);
                         worstValue = Math.min(...rowAccountedValues);
-                    } else if (metric.higherIsBetter === false) {
-                        bestValue = Math.min(...rowAccountedValues);
-                        worstValue = Math.max(...rowAccountedValues);
+                        if (metric.higherIsBetter === false)
+                            [bestValue, worstValue] = [worstValue, bestValue];
                     }
+                    let rowClasses = [];
                     for (let idx = 0; idx < rowValues.length; ++idx) {
                         const value = rowValues[idx];
                         let classes = [];
@@ -210,9 +210,7 @@ App.directive('ngMetricTable', function () {
                     $scope.formattedValues.push(rowFormattedValues);
                     $scope.cellClasses.push(rowClasses);
                 }
-            }
-
-            $scope.$watchGroup(["names", "metrics", "values"], updateTable);
+            });
         },
     };
 });
@@ -591,7 +589,7 @@ App.controller('CompareCtrl', ['State', '$scope', '$document', function (State, 
         indices.sort((a, b) => {
             for (let idx in $scope.selectedMetrics)
                 if (cmps[a][idx] !== cmps[b][idx]) return cmps[a][idx] - cmps[b][idx];
-            return 0;
+            return a - b;  // fallback to sort by index
         });
         const allExamples = State.getAllExamples();
         $scope.filteredExamples = indices.map(idx => allExamples[idx]);
