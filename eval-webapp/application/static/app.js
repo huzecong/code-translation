@@ -336,12 +336,15 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         confusion_mat: ConfusionMatMetric,
     };
 
-    $http.get("static/data/eval.json").then(response => {
-        state.examples = response.data.examples;
+    $http.get("static/data/eval.json.gz", {
+        responseType: "arraybuffer",
+    }).then(response => {
+        const data = JSON.parse(new TextDecoder().decode(pako.inflate(response.data)));
+        state.examples = data.examples;
         state.metrics = [];
-        for (const metric of response.data.metrics)
+        for (const metric of data.metrics)
             state.metrics.push(new metricClass[metric.type](metric));
-        state.systems = response.data.systems;
+        state.systems = data.systems;
         state.ready = true;
     });
 

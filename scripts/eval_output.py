@@ -629,6 +629,7 @@ class JSONExporter(BaseExporter):
         }
         with open(self.export_path, "w") as f:
             json.dump(json_dict, f)
+        flutes.run_command(["gzip", "--best", "--keep", self.export_path])
 
 
 class Evaluator:
