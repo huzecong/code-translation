@@ -231,7 +231,7 @@ App.directive('ngHypothesis', function () {
 });
 
 App.controller('AccordionCtrl', ['State', '$scope', '$element', function (State, $scope, $element) {
-    let _active = State.getPersistenceState("accordion-" + $element.id);
+    let _active = State.getPersistenceState("accordion-" + $element.attr("id"));
     $scope.active = {
         setDefault: function (key, value) {
             if (_active[key] === undefined)
@@ -242,6 +242,7 @@ App.controller('AccordionCtrl', ['State', '$scope', '$element', function (State,
         },
         toggle: function (key) {
             _active[key] = !_active[key];
+            _active.$save();
         },
     };
 }]).directive('ngAccordion', function () {
@@ -310,7 +311,25 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         systems: null,
         examples: [],
     };
-    let _persistence = {};
+
+    class Persistence {
+        constructor(key) {
+            this.$key = key;
+            const loadObj = angular.fromJson(localStorage.getItem(key) || "{}");
+            for (let attr in loadObj)
+                if (loadObj.hasOwnProperty(attr))
+                    this[attr] = loadObj[attr];
+        }
+
+        // Always remember to $save after changes!
+        $save() {
+            let dumpObj = {};
+            for (let attr in this)
+                if (this.hasOwnProperty(attr) && !attr.startsWith("$"))
+                    dumpObj[attr] = this[attr];
+            localStorage.setItem(this.$key, angular.toJson(dumpObj));
+        }
+    }
 
     const metricClass = {
         int: IntMetric,
@@ -337,10 +356,7 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         isReady: () => state.ready,
         lastIndex: 1,
         getPersistenceState: (id) => {
-            let obj = _persistence[id];
-            if (obj === undefined)
-                obj = _persistence[id] = {};
-            return obj;
+            return new Persistence(id);
         }
     };
 }]);
@@ -383,8 +399,11 @@ App.controller('MainCtrl', ['State', '$route', '$scope', '$timeout', function (S
         }
     });
 
-    $scope.showOracleVar = false;
+    const persistence = State.getPersistenceState("_main_ctrl");
+    $scope.showOracleVar = persistence.showOracleVar || false;
     $scope.updateVarName = function () {
+        persistence.showOracleVar = $scope.showOracleVar;
+        persistence.$save();
         if ($scope.showOracleVar) {
             $(".decompiled-var").addClass("hide");
             $(".oracle-var").removeClass("hide");
@@ -481,6 +500,7 @@ App.controller('CompareCtrl', ['State', '$scope', '$document', function (State, 
         persistentState.selectedMetricKeys = $scope.selectedMetricKeys;
         persistentState.currentPage = $scope.pagination.currentPage;
         persistentState.currentIndex = $scope.pagination.currentIndex;
+        persistentState.$save();
     }
 
 

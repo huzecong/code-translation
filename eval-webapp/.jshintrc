@@ -9,6 +9,7 @@
     "console": false,
     "Prism": false,
     "$": false,
+    "localStorage": false,
 
     // Angular mocks
     "module": false,
