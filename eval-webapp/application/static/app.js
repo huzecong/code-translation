@@ -337,9 +337,17 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
     };
 
     $http.get("static/data/eval.json.gz", {
+        headers: {
+            "Content-Encoding": "gzip",
+        },
         responseType: "arraybuffer",
     }).then(response => {
-        const data = JSON.parse(new TextDecoder().decode(pako.inflate(response.data)));
+        let data = response.data;
+        if (response.headers("content-type") === "application/json") {
+            // Manually parse data if the server does not support compressed HTTP response (e.g., local server).
+            data = pako.inflate(response.data);
+        }
+        data = JSON.parse(new TextDecoder().decode(data));
         state.examples = data.examples;
         state.metrics = [];
         for (const metric of data.metrics)
