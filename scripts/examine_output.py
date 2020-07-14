@@ -176,6 +176,7 @@ def main():
         ("TranX-O-Greedy", False),
         ("TranX-O-Beam5", False),
         ("TranX-t2t-D-Greedy", False),
+        ("TranX-t2t-D-Beam5", False),
         ("TranX-t2t-O-Greedy", False),
         ("TranX-t2t-O-Beam5", False),
         ("TranX-t2t-D-Greedy+Finetune", True),
@@ -192,6 +193,7 @@ def main():
         (tranx_model_name_1, 1),
         (tranx_model_name_1, 5),
         (tranx_model_name_2.format(varname="decompiled"), 1),
+        (tranx_model_name_2.format(varname="decompiled"), 5),
         (tranx_model_name_2.format(varname="original"), 1),
         (tranx_model_name_2.format(varname="original"), 5),
         (tranx_model_name_3.format(varname="decompiled"), 1),
@@ -210,6 +212,7 @@ def main():
     overlap_paths = ["data/processed/" + ("overlap_test.txt" if not is_finetune else "overlap_extra_test.txt")
                      for _, is_finetune in systems]
     assert len(names) == len(hyp_paths)
+    print("\n".join(f"{name}:   {path}" for name, path in zip(names, hyp_paths)))
     hyp_data = {}
     for name, hyp_path in zip(names, hyp_paths):
         hyp_data[name] = list(read_lines(hyp_path, verbose=False, skip_empty=False))

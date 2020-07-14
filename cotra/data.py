@@ -7,7 +7,7 @@ import numpy as np
 import sentencepiece as spm
 import texar.torch as tx
 import torch
-from bashplotlib.histogram import plot_hist
+# from bashplotlib.histogram import plot_hist
 
 from . import utils
 

@@ -17,7 +17,7 @@ import cotra
 
 
 class Args(Arguments):
-    config_file: str = "config/default.yaml"
+    config_file: str
     run_mode: Choices["train", "valid", "test"] = "train"
     output_dir: str = "outputs_new/"
     test_output_file: str = "{split}.hyp.orig"
@@ -25,7 +25,7 @@ class Args(Arguments):
     checkpoint_path: Optional[str] = None
     pdb: Switch = False
     n_procs: int = 2
-    curriculum: Switch = True
+    curriculum: Switch = False
     debug: Switch = False
     force: Switch = False
     extra_config: Optional[str]  # if specified, will be parsed as dictionary and merged with config dictionary
@@ -92,6 +92,9 @@ def main() -> None:
             "curriculum": {"enabled": args.curriculum},
             "verbose": config["data"]["verbose"],
             "num_parallel_calls": args.n_procs,
+            "lazy_strategy": "all",
+            "cache_strategy": "none",
+            "shuffle_buffer_size": 4096,
         })
     eval_splits: Dict[str, Dict[str, str]] = {
         "valid": config["data"]["valid_sets"],
@@ -158,8 +161,13 @@ def main() -> None:
     executor.write_log(pprint.pformat(config))
     all_datasets = {"train": train_dataset,
                     **{key: value for datasets in eval_datasets.values() for key, value in datasets.items()}}
-    executor.write_log("Data size: " +
-                       repr({key: len(split) for key, split in all_datasets.items() if split is not None}))
+    try:
+        executor.write_log("Data size: " +
+                           repr({key: len(split) for key, split in all_datasets.items() if split is not None}))
+    except TypeError:
+        pass
+    n_params = sum(param.numel() for param in model.parameters())
+    executor.write_log(f"#Parameters: {str(n_params)}")
 
     if args.curriculum:
         @executor.on_event(cond.Event.Epoch, 'begin')
@@ -168,10 +176,6 @@ def main() -> None:
             train_dataset.update_steps(exc.status["iteration"])
             exc._train_tracker.set_size(len(train_dataset))
             exc.write_log(f"Epoch {exc.status['epoch']}, competency updated to {train_dataset.competency * 100:6.2f}%")
-
-    # @executor.on(cond.validation(better=True))
-    # def test_on_excluded_validation_set(exc: Executor):
-    #     exc.test({"valid_repos_excluded": eval_datasets["valid"]["valid_repos_excluded"]})
 
     executor.write_log(f"Begin running with {args.run_mode} mode")
     if args.run_mode == "train":

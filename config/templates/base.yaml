@@ -1,18 +1,18 @@
 random_seed: 19260817
 
 data:
-  training_set: "data/processed/train.txt"
+  training_set: "data/train.txt"
   valid_sets:
-    default: "data/processed/valid.txt"
+    default: "data/valid.txt"
   test_sets:
-    default: "data/processed/test.txt"
-  vocab_file: "data/processed/vocab.vocab"
-  verbose: true
+    default: "data/test.txt"
+  vocab_file: "data/vocab.vocab"
+  verbose: false
   hparams:
     token_delimiter: "\u0000"
     max_src_len: 512
     max_tgt_len: 512
-    spm_model: "data/processed/vocab.model"
+    spm_model: "data/vocab.model"
 
 model:
   hidden_dim: 512

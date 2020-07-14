@@ -1,0 +1,6 @@
+!template
+  path: "templates/base.yaml"
+  overrides:
+    - !include "templates/varname_decomp.yaml"
+    - training:
+        max_batch_tokens: 3800
