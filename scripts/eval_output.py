@@ -5,8 +5,8 @@ import os
 import pickle
 import string
 from collections import Counter, OrderedDict, defaultdict
-from typing import Any, Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, TypeVar, \
-    overload
+from typing import (Any, Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple,
+                    TypeVar, overload, Union)
 
 import flutes
 import numpy as np
@@ -15,7 +15,10 @@ from argtyped import Arguments
 from termcolor import colored
 from tqdm import trange
 from typing_extensions import Literal
+import networkx as nx
+from networkx.algorithms import bipartite
 
+import cotra
 from cotra.parse import LexToken, Lexer
 
 
@@ -36,7 +39,7 @@ class Portion:
         ...
 
     @overload
-    def __init__(self, is_correct: Iterable[bool]):
+    def __init__(self, is_correct: Union[Iterable[bool], Iterable[float]]):
         ...
 
     def __init__(self, *args, **kwargs):
@@ -53,7 +56,8 @@ class Portion:
             iterable = _get(0, "is_correct")
             self.correct = self.total = 0
             for elem in iterable:
-                self.correct += int(elem)
+                # `bool` will be implicitly converted to `int`, and `float` will implicitly convert `correct`.
+                self.correct += elem
                 self.total += 1
         else:
             if len(args) + len(kwargs) > 2:
@@ -68,10 +72,13 @@ class Portion:
         return self.correct / self.total
 
     def __repr__(self) -> str:
+        if isinstance(self.correct, float):
+            return f"{self.correct:.2f} / {self.total}"
         return f"{self.correct} / {self.total}"
 
     def to_json(self) -> JSON:
         return {
+            "digits": 2 if isinstance(self.correct, float) else 0,
             "correct": self.correct,
             "total": self.total,
         }
@@ -462,6 +469,16 @@ class CProcessor:
         return list(cls.lexer.lex_tokens(code))
 
     @classmethod
+    def normalize_type(cls, typ: List[str], cv_qualifiers: bool = False, storage_qualifiers: bool = False) -> str:
+        # If not `strict`, discard qualifiers.
+        qualifiers = {"signed"}
+        if not cv_qualifiers:
+            qualifiers.update(["const", "volatile"])
+        if not storage_qualifiers:
+            qualifiers.update(["static", "auto", "register", "extern", "restrict"])
+        return " ".join(x for x in typ if x not in qualifiers)
+
+    @classmethod
     def is_same_type(cls, a: TypeSignature, b: TypeSignature,
                      cv_qualifiers: bool = False, storage_qualifiers: bool = False) -> bool:
         # If not `strict`, discard qualifiers.
@@ -529,8 +546,11 @@ class BaseExporter:
     def __init__(self, path: str, metrics: List[Stats.Metric], systems: List['Evaluator.System']):
         self.export_path = path
         self.index = 0
-        self.metrics = metrics
-        self.systems = systems
+        self.metrics = copy.deepcopy(metrics)
+        self.systems = copy.deepcopy(systems)
+        for idx, system in enumerate(self.systems):
+            if system.description is None:
+                self.systems[idx] = system._replace(description=" + ".join(system.tags))
 
     def add_example(
             self,
@@ -552,30 +572,37 @@ class JSONExporter(BaseExporter):
 
     @classmethod
     def _generate_code_section(cls, code: List[str], sig: CProcessor.FuncSignature) -> JSON:
+        arg_list: List[JSON] = []
+        for arg_idx, (arg_type, arg_name) in enumerate(sig.args):
+            arg_json = {
+                "type": " ".join(arg_type.type),
+                "name": arg_name,
+            }
+            arg_list.append(arg_json)
         return {
             "code": CProcessor.prettify(code),
             "func_name": sig.name,
             "ret_type": " ".join(sig.ret_type.type),
-            "args": [(name, " ".join(typ.type)) for typ, name in sig.args],
+            "args": arg_list,
         }
 
     @classmethod
-    def _generate_arg_comparison(cls, sig: CProcessor.FuncSignature, is_correct: 'Evaluator.EvalOutput') -> JSON:
-        arg_list: List[Tuple[str, str, Optional[bool]]] = []
-        redundant = is_correct.redundant_args.copy()
-        for arg_typ, arg_name in reversed(sig.args):
-            # Go in reverse order so we mark later occurrences of the same variable as redundant.
-            if arg_name in redundant:
-                verdict = None  # redundant
-                redundant.remove(arg_name)
-            else:
-                verdict = is_correct.arg_types[arg_name]
-            arg_list.append((arg_name, " ".join(arg_typ.type), verdict))
-        arg_list = list(reversed(arg_list))
-        missing = [k for k, v in is_correct.missing_args.items() if v]
+    def _generate_arg_comparison(cls, hyp: CProcessor.FuncSignature, is_correct: 'Evaluator.EvalOutput') -> JSON:
+        arg_list: List[JSON] = []
+        for hyp_idx, (hyp_arg_type, hyp_arg_name) in enumerate(hyp.args):
+            tgt_idx = is_correct.match_idx[hyp_idx]
+            arg_json: JSON = {
+                "type":  " ".join(hyp_arg_type.type),
+                "name": hyp_arg_name,
+                "match_idx": tgt_idx,
+                "name_score": is_correct.arg_names[hyp_idx],
+                "type_score": is_correct.arg_types[hyp_idx],
+            }
+            arg_list.append(arg_json)
+        missing_args = [idx for idx, is_missing in enumerate(is_correct.missing_args) if is_missing]
         return {
             "args": arg_list,  # override the list above in `_generate_code_section`
-            "missing_args": missing,
+            "missing_args": missing_args,
         }
 
     def add_example(
@@ -629,6 +656,7 @@ class JSONExporter(BaseExporter):
         }
         with open(self.export_path, "w") as f:
             json.dump(json_dict, f)
+        os.remove(self.export_path + ".gz")
         flutes.run_command(["gzip", "--best", "--keep", self.export_path])
 
 
@@ -638,27 +666,36 @@ class Evaluator:
     class System(NamedTuple):
         key: str
         name: str
-        description: str
+        description: Optional[str] = None
         use_var_map: bool = False
+        tags: List[str] = []
 
     SYSTEMS = [
         System("decompiled", "Decompiled", "Code produced by the decompiler", use_var_map=True),
-        System("seq2seq_d", "Seq2seq-D", "Seq2seq + decompiler var names"),
-        System("seq2seq_o", "Seq2seq-O", "Seq2seq + oracle var names"),
-        System("seq2seq_d_ft", "Seq2seq-D +FT", "Fine-tuned Seq2seq + decompiler var names"),
-        System("seq2seq_o_ft", "Seq2seq-O +FT", "Fine-tuned Seq2seq + oracle var names"),
-        # System("tranx_d_greedy", "TranX-D Greedy", "TranX + decompiler var names + greedy decoding"),
-        # System("tranx_d_beam5", "TranX-D Beam5", "TranX + decompiler var names + beam width 5"),
-        System("tranx_o_greedy", "TranX-O Greedy", "TranX + oracle var names + greedy decoding"),
-        System("tranx_o_beam5", "TranX-O Beam5", "TranX + oracle var names + beam width 5"),
-        System("tranx_t2t_d_greedy", "TranX-t2t-D Greedy", "TranX tree2tree + decompiled var names + greedy decoding"),
-        # System("tranx_t2t_d_greedy", "TranX-t2t-D Beam5", "TranX tree2tree + decompiled var names + greedy decoding"),
-        System("tranx_t2t_o_greedy", "TranX-t2t-O Greedy", "TranX tree2tree + oracle var names + greedy decoding"),
-        System("tranx_t2t_o_greedy", "TranX-t2t-O Beam5", "TranX tree2tree + oracle var names + beam width 5"),
-        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D +FT Greedy", "Fine-tuned TranX tree2tree + decompiler var names + greedy decoding"),
-        System("tranx_t2t_d_beam5_ft", "TranX-t2t-D +FT Beam5", "Fine-tuned TranX + decompiler var names + beam width 5"),
-        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O +FT Greedy", "Fine-tuned TranX tree2tree + oracle var names + greedy decoding"),
-        System("tranx_t2t_o_beam5_ft", "TranX-t2t-O +FT Beam5", "Fine-tuned TranX + oracle var names + beam width 5"),
+        System("seq2seq_d", "Seq2seq-D", tags=["Seq2seq", "Decompiled var name", "Beam width 5"]),
+        System("seq2seq_o", "Seq2seq-O", tags=["Seq2seq", "Oracle var name", "Beam width 5"]),
+        System("seq2seq_d_ft", "Seq2seq-D +FT", tags=["Seq2seq", "Decompiled var name", "Fine-tuned", "Beam width 5"]),
+        System("seq2seq_o_ft", "Seq2seq-O +FT", tags=["Seq2seq", "Oracle var name", "Fine-tuned", "Beam width 5"]),
+        # System("tranx_d_greedy", "TranX-D Greedy", tags=["TranX", "Decompiler var names", "Greedy decoding"]),
+        # System("tranx_d_beam5", "TranX-D Beam5", tags=["TranX", "Decompiler var names", "Beam width 5"]),
+        System("tranx_o_greedy", "TranX-O Greedy", tags=["TranX", "Oracle var name", "Greedy decoding"]),
+        System("tranx_o_beam5", "TranX-O Beam5", tags=["TranX", "Oracle var name", "Beam width 5"]),
+        System("tranx_t2t_d_greedy", "TranX-t2t-D Greedy",
+               tags=["TranX", "Tree2tree", "Decompiled var name", "Greedy decoding"]),
+        System("tranx_t2t_d_beam5", "TranX-t2t-D Beam5",
+               tags=["TranX", "Tree2tree", "Decompiled var name", "Beam width 5"]),
+        System("tranx_t2t_o_greedy", "TranX-t2t-O Greedy",
+               tags=["TranX", "Tree2tree", "Oracle var name", "Greedy decoding"]),
+        System("tranx_t2t_o_beam5", "TranX-t2t-O Beam5",
+               tags=["TranX", "Tree2tree", "Oracle var name", "Beam width 5"]),
+        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D +FT Greedy",
+               tags=["TranX", "Tree2tree", "Decompiled var name", "Greedy decoding", "Fine-tuned"]),
+        System("tranx_t2t_d_beam5_ft", "TranX-t2t-D +FT Beam5",
+               tags=["TranX", "Tree2tree", "Decompiled var name", "Beam width 5", "Fine-tuned"]),
+        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O +FT Greedy",
+               tags=["TranX", "Tree2tree", "Oracle var name", "Greedy decoding", "Fine-tuned"]),
+        System("tranx_t2t_o_beam5_ft", "TranX-t2t-O +FT Beam5",
+               tags=["TranX", "Tree2tree", "Oracle var name", "Beam width 5", "Fine-tuned"]),
     ]
 
     def __init__(self, exporter: Optional[BaseExporter] = None):
@@ -673,49 +710,137 @@ class Evaluator:
         self.exporter = exporter
 
     class EvalOutput(NamedTuple):
-        func_name: bool  # is_correct
-        ret_type: bool  # is_correct
-        ret_type_strict: bool  # is_correct
-        missing_args: Dict[str, bool]  # (name) -> is_missing
-        redundant_args: List[str]  # [name]
-        arg_types: Dict[str, bool]  # (name) -> is_correct
-        arg_types_strict: Dict[str, bool]  # (name) -> is_correct
-        pointer_conversion: Dict[str, Tuple[bool, bool]]  # (name) -> (should_convert, did_convert)
+        func_name: float  # is_correct
+        ret_type: float  # is_correct
+        ret_type_strict: float  # is_correct
+        missing_args: List[bool]  # [tgt_var_idx: is_missing]
+        match_idx: List[Optional[int]]  # [hyp_var_idx: matching_tgt_var_idx?]
+        arg_names: List[float]  # [hyp_var_idx: name_score]
+        arg_types: List[float]  # [hyp_var_idx: type_score]
+        arg_types_strict: List[float]  # [hyp_var_idx: type_score]
+        pointer_conversion: Dict[str, Tuple[bool, bool]]  # (tgt_var_name) -> (should_convert, did_convert)
+
+    def _compare_strings(self, a: str, b: str) -> float:
+        return 1.0 - cotra.utils.edit_distance(a, b, swap=1) / max(len(a), len(b))
+
+    def _compare_types(self, a: CProcessor.TypeSignature, b: CProcessor.TypeSignature, strict: bool = False) -> float:
+        a_type = CProcessor.normalize_type(a.type, cv_qualifiers=strict)
+        b_type = CProcessor.normalize_type(b.type, cv_qualifiers=strict)
+        return self._compare_strings(a_type, b_type)
+
+    def _argument_match_confidence(self,
+                                   a: Tuple[CProcessor.TypeSignature, str], pos_a: int,
+                                   b: Tuple[CProcessor.TypeSignature, str], pos_b: int) -> float:
+        r"""Returns the matching confidence between two arguments. Confidence values are normalized to the interval of
+        [0, 1]. Confidence of 1 indicates that the two arguments are identical, and lower values represent worse
+        matches.
+
+        The current formula is:
+
+            0.7 * name_score + 0.3 * type_score - 0.05 * position_penalty
+
+        where `name_score` and `type_score` are normalized Damerau-Levenshtein distances (edit distance with swaps):
+
+            name_score = 1.0 - edit_distance(a, b) / max(len(a), len(b))
+
+        and `position_penalty` is the absolute difference between argument positions.
+
+        Well, actually the minimum value could be less than 0. This is to preferring arguments in order when all choices
+        are equally bad.
+        """
+        a_type, a_name = a
+        b_type, b_name = b
+        type_score = self._compare_strings(" ".join(a_type.type), " ".join(b_type.type))
+        name_score = self._compare_strings(a_name, b_name)
+        # Names are more important than types... I think.
+        return type_score * 0.3 + name_score * 0.7 - 0.05 * abs(pos_a - pos_b)
+
+    def _min_weight_matching(self, scores: np.ndarray) -> Tuple[List[Optional[int]], List[Optional[int]]]:
+        graph = nx.Graph()
+        n_left, n_right = scores.shape
+        graph.add_nodes_from(range(n_left), bipartite=0)
+        graph.add_nodes_from(range(n_left, n_left + n_right), bipartite=1)
+
+        for l_idx in range(n_left):
+            for r_idx in range(n_right):
+                graph.add_edge(l_idx, n_left + r_idx, weight=scores[l_idx, r_idx])
+        if n_left > 0 and n_right > 0:
+            matches = bipartite.minimum_weight_full_matching(graph)
+        else:
+            matches = {}
+        l_match_r_idx: List[Optional[int]] = [None] * n_left
+        r_match_l_idx: List[Optional[int]] = [None] * n_right
+        for l_idx in range(n_left):
+            if l_idx in matches:
+                r_idx = matches[l_idx] - n_left
+                l_match_r_idx[l_idx] = r_idx
+                r_match_l_idx[r_idx] = l_idx
+        return l_match_r_idx, r_match_l_idx
+
+    def _match_arguments(self, hyp: CProcessor.FuncSignature, tgt: CProcessor.FuncSignature) \
+            -> Tuple[List[Optional[int]], List[Optional[int]]]:
+        r"""Return an optimal matching between two sets of arguments.
+
+        :return: A tuple of two lists:
+            - A list of index of the matching target argument for each argument in the hypothesis, or ``None`` if the
+              argument in hypothesis had no match.
+            - Similarly, the index of matching hypothesis argument for each argument in the target, or ``None`` if no
+              match.
+        """
+        costs = np.zeros((len(hyp.args), len(tgt.args)))
+        for l_idx, l_arg in enumerate(hyp.args):
+            for r_idx, r_arg in enumerate(tgt.args):
+                cost = 1.0 - self._argument_match_confidence(l_arg, l_idx, r_arg, r_idx)
+                costs[l_idx, r_idx] = cost
+        hyp_match_tgt_idx, tgt_match_hyp_idx = self._min_weight_matching(costs)
+        return hyp_match_tgt_idx, tgt_match_hyp_idx
 
     def _evaluate_signatures(self,
                              src: CProcessor.FuncSignature,
+                             tgt_match_src_arg_idx: List[Optional[int]],
                              tgt: CProcessor.FuncSignature,
                              hyp: CProcessor.FuncSignature) -> 'EvalOutput':
-        correct_func_name = tgt.name == hyp.name
-        correct_ret_type = CProcessor.is_same_type(tgt.ret_type, hyp.ret_type)
-        correct_ret_type_strict = CProcessor.is_same_type(tgt.ret_type, hyp.ret_type, cv_qualifiers=True)
-        missing: Dict[str, bool] = {}
-        correct_arg_types: Dict[str, bool] = {}
-        correct_arg_types_strict: Dict[str, bool] = {}
+        correct_func_name = self._compare_strings(tgt.name, hyp.name)
+        correct_ret_type = self._compare_types(tgt.ret_type, hyp.ret_type)
+        correct_ret_type_strict = self._compare_types(tgt.ret_type, hyp.ret_type, strict=True)
+        missing: List[bool] = [True] * len(tgt.args)
+        correct_arg_names: List[float] = []
+        correct_arg_types: List[float] = []
+        correct_arg_types_strict: List[float] = []
         pointer_check_types = {"": (src.ret_type, tgt.ret_type, hyp.ret_type)}
-        hyp_args = hyp.args.copy()
-        for tgt_arg_type, arg_name in tgt.args:
-            src_arg_typ = next((typ for typ, name in src.args if name == arg_name), None)
-            idx = next((idx for idx, (_, name) in enumerate(hyp_args) if name == arg_name), None)
-            missing[arg_name] = (idx is None)
-            if idx is not None:
-                hyp_arg_typ, _ = hyp_args[idx]
-                correct_arg_types[arg_name] = CProcessor.is_same_type(tgt_arg_type, hyp_arg_typ)
-                correct_arg_types_strict[arg_name] = CProcessor.is_same_type(
-                    tgt_arg_type, hyp_arg_typ, cv_qualifiers=True)
-                if src_arg_typ is not None:
-                    pointer_check_types[arg_name] = (src_arg_typ, tgt_arg_type, hyp_arg_typ)
-                del hyp_args[idx]
+        hyp_match_tgt_arg_idx, tgt_match_hyp_arg_idx = self._match_arguments(hyp, tgt)
 
+        # Compute match scores for each argument in the hypothesis.
+        for hyp_idx, (hyp_arg_type, hyp_arg_name) in enumerate(hyp.args):
+            tgt_idx = hyp_match_tgt_arg_idx[hyp_idx]
+            arg_name_score = arg_type_score = arg_type_strict_score = 0.0
+            if tgt_idx is not None:
+                tgt_arg_type, tgt_arg_name = tgt.args[tgt_idx]
+                missing[tgt_idx] = False
+                arg_name_score = self._compare_strings(tgt_arg_name, hyp_arg_name)
+                arg_type_score = self._compare_types(tgt_arg_type, hyp_arg_type)
+                arg_type_strict_score = self._compare_types(tgt_arg_type, hyp_arg_type, strict=True)
+                src_idx = tgt_match_src_arg_idx[tgt_idx]
+                if src_idx is not None:
+                    src_arg_type, _ = src.args[src_idx]
+                    pointer_check_types[tgt_arg_name] = (src_arg_type, tgt_arg_type, hyp_arg_type)
+            correct_arg_names.append(arg_name_score)
+            correct_arg_types.append(arg_type_score)
+            correct_arg_types_strict.append(arg_type_strict_score)
+
+        # Check whether adding pointers is required going from source to target, and whether we've done that in the
+        # hypothesis.
         correct_pointer_conversion: Dict[str, Tuple[bool, bool]] = {}
-        for arg_name, (src_typ, tgt_typ, hyp_typ) in pointer_check_types.items():
-            if not src_typ.pointer_layer:
-                correct_pointer_conversion[arg_name] = (tgt_typ.pointer_layer > 0, hyp_typ.pointer_layer > 0)
+        for tgt_arg_name, (src_typ, tgt_typ, hyp_typ) in pointer_check_types.items():
+            if src_typ.pointer_layer == 0:
+                correct_pointer_conversion[tgt_arg_name] = (tgt_typ.pointer_layer > 0, hyp_typ.pointer_layer > 0)
+
         return self.EvalOutput(func_name=correct_func_name,
                                ret_type=correct_ret_type,
                                ret_type_strict=correct_ret_type_strict,
                                missing_args=missing,
-                               redundant_args=[name for _, name in hyp_args],
+                               match_idx=hyp_match_tgt_arg_idx,
+                               arg_names=correct_arg_names,
                                arg_types=correct_arg_types,
                                arg_types_strict=correct_arg_types_strict,
                                pointer_conversion=correct_pointer_conversion)
@@ -766,6 +891,7 @@ class Evaluator:
         self.references.append(tgt_tokens)
         tgt_tokens_no_var, tgt_string_literals = self._analyze_code(tgt)
         self.references_no_var.append(tgt_tokens_no_var)
+        _, tgt_match_src_arg_idx = self._match_arguments(src_func_sig, tgt_func_sig)
 
         hyp_outputs = OrderedDict()
         for name, summary_stats in self.summary_stats.items():
@@ -776,7 +902,7 @@ class Evaluator:
                 hyp = var_replaced_src
                 hyp_tokens, hyp_func_sig, parsable = src_tokens, src_func_sig, src_parsable
             hyp_tokens_no_var, hyp_string_literals = self._analyze_code(hyp)
-            is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_func_sig, hyp_func_sig)
+            is_correct_hyp = self._evaluate_signatures(src_func_sig, tgt_match_src_arg_idx, tgt_func_sig, hyp_func_sig)
 
             missing_strings = tgt_string_literals - hyp_string_literals
             redundant_strings = hyp_string_literals - tgt_string_literals
@@ -793,11 +919,11 @@ class Evaluator:
             cur_stats.func_name = Portion([is_correct_hyp.func_name])
             cur_stats.ret_type = Portion([is_correct_hyp.ret_type])
             cur_stats.ret_type_strict = Portion([is_correct_hyp.ret_type_strict])
-            cur_stats.arg_name = Portion([not v for v in is_correct_hyp.missing_args.values()])
-            cur_stats.arg_type = Portion(is_correct_hyp.arg_types.values())
-            cur_stats.arg_type_strict = Portion(is_correct_hyp.arg_types_strict.values())
-            cur_stats.arg_missing = Portion(is_correct_hyp.missing_args.values())
-            cur_stats.arg_redundant = len(is_correct_hyp.redundant_args)
+            cur_stats.arg_name = Portion(sum(is_correct_hyp.arg_names), len(tgt_func_sig.args))
+            cur_stats.arg_type = Portion(sum(is_correct_hyp.arg_types), len(tgt_func_sig.args))
+            cur_stats.arg_type_strict = Portion(sum(is_correct_hyp.arg_types_strict), len(tgt_func_sig.args))
+            cur_stats.arg_missing = Portion(is_correct_hyp.missing_args)
+            cur_stats.arg_redundant = sum(idx is None for idx in is_correct_hyp.match_idx)
             cur_stats.str_missing = Portion(len(missing_strings), len(tgt_string_literals))
             cur_stats.str_redundant = len(redundant_strings)
             cur_stats.pointer_conversion = ConfusionMat(gold=[g for g, _ in is_correct_hyp.pointer_conversion.values()],
@@ -869,7 +995,8 @@ def main():
         [[system.name, name] for name, system in name_map.items()])
     print(name_table.to_str())
 
-    for file_name, max_size in [("eval-small", 100), ("eval", len(data.src_data))]:
+    for file_name, max_size in [("eval-small", 50), ("eval", len(data.src_data))]:
+    # for file_name, max_size in [("eval-small", 50)]:
         # exporter = HTMLExporter(os.path.join(args.output_dir, file_name + ".html"), data.names)
         exporter = JSONExporter(os.path.join(args.output_dir, file_name + ".json"), Stats.METRICS, Evaluator.SYSTEMS)
         evaluator = Evaluator(exporter=exporter)

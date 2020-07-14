@@ -9,3 +9,4 @@ git+https://github.com/asyml/texar-pytorch.git@95f3d644680656f38b7b1779f2ba184ef
 termcolor
 torch >= 1.2.0
 tqdm
+networkx
