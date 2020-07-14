@@ -1,43 +1,83 @@
 <div class="hypothesis">
     <ng-prism language="c" code="data.code" var-map="varMap"></ng-prism>
-    <ul>
-        <li>Function name:
+
+    <h5>Signature</h5>
+    <ul class="ui list">
+        <li class="item">Function name:
             <ng-check pred="data.func_name" label="target.func_name"/>
+            (score: {{data.metrics['func_name'].correct.toFixed(3)}})
         </li>
-        <li>Return type:
+        <li class="item">Return type:
             <ng-check pred="data.ret_type" label="target.ret_type"/>
-        </li>
-        <li>Arguments:
-            <ul>
-                <li ng-repeat="arg in data.args">
-                    <ng-check cond="arg[2]" pred="arg[0]">
-                        <span ng-if="arg[2] === null">(redundant)</span>
-                    </ng-check>
-                    : <code>{{arg[1]}}</code>
-                </li>
-                <li ng-if="data.missing_args && data.missing_args.length > 0">
-                    <u>Missing:</u>
-                    <span ng-repeat-start="arg in data.missing_args"><code class="negative">{{arg}}</code></span>
-                    <span ng-repeat-end ng-if="!$last">, </span>
-                </li>
-            </ul>
-        </li>
-        <li ng-if="data.missing_strings.length > 0">Missing string literals:
-            <ul>
-                <li ng-repeat="str in data.missing_strings"><code class="negative">{{str}}</code></li>
-            </ul>
-        </li>
-        <li ng-if="data.redundant_strings.length > 0">Redundant string literals:
-            <ul>
-                <li ng-repeat="str in data.redundant_strings"><code class="negative">{{str}}</code></li>
-            </ul>
-        </li>
-        <li>Metrics:
-            <ul>
-                <li ng-repeat="metric in metrics" ng-init="value = data.metrics[metric.key]">
-                    {{metric.name}}: {{metric.format(data.metrics[metric.key])}}
-                </li>
-            </ul>
+            (score: {{data.metrics['ret_type'].correct.toFixed(3)}})
         </li>
     </ul>
+
+    <h5>Arguments</h5>
+    <table class="ui very compact celled table args-table">
+        <thead>
+        <tr>
+            <th colspan="3">Hypothesis</th>
+            <th colspan="3">Target</th>
+            <th>Score</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr ng-repeat-start="arg in data.args">
+            <td class="index top aligned">#{{$index + 1}}</td>
+            <td class="label no-border-left top aligned"><b>Type:</b></td>
+            <td class="no-border-left"><code>{{arg.type}}</code></td>
+            <td ng-if="arg.match_idx !== null" class="index top aligned" rowspan="2"
+                ng-class="{'negative': arg.match_idx != $index}">
+                #{{arg.match_idx + 1}}</td>
+            <td ng-if="arg.match_idx !== null" class="label no-border-left top aligned"><b>Type:</b></td>
+            <td ng-if="arg.match_idx !== null" class="no-border-left"><code>{{target.args[arg.match_idx].type}}</code>
+            </td>
+            <td colspan="3" rowspan="2" ng-if="arg.match_idx === null">Redundant</td>
+            <td class="center aligned"
+                ng-class="{'positive': arg.type_score == 1.0, 'negative': arg.type_score < 0.5}">
+                {{arg.type_score.toFixed(2)}}
+            </td>
+        </tr>
+        <tr ng-repeat-end>
+            <td class="no-border"></td>
+            <td class="label no-border top aligned no-padding"><b>Name:</b></td>
+            <td class="no-border"><code>{{arg.name}}</code></td>
+            <td ng-if="arg.match_idx!= null" class="label no-border top aligned no-padding"><b>Name:</b></td>
+            <td ng-if="arg.match_idx!= null" class="no-border"><code>{{target.args[arg.match_idx].name}}</code></td>
+            <td class="center aligned no-border-top"
+                ng-class="{'positive': arg.name_score == 1.0, 'negative': arg.name_score < 0.5}">
+                {{arg.name_score.toFixed(2)}}
+            </td>
+        </tr>
+        <tr ng-repeat-start="targetIdx in data.missing_args">
+            <td colspan="3" rowspan="2" class="center aligned negative">Missing</td>
+            <td class="top aligned">#{{targetIdx + 1}}</td>
+            <td class="no-border-left top aligned no-padding"><b>Type:</b></td>
+            <td class="no-border-left"><code>{{target.args[targetIdx].type}}</code></td>
+            <td class="center aligned negative">0.00</td>
+        </tr>
+        <tr ng-repeat-end>
+            <td class="no-border-top border-left"></td>
+            <td class="no-border top aligned no-padding"><b>Name:</b></td>
+            <td class="no-border"><code>{{target.args[targetIdx].name}}</code></td>
+            <td class="center aligned no-border-top negative">0.00</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <h5 ng-if="data.missing_strings.length > 0">Missing string literals</h5>
+    <ul>
+        <li ng-repeat="str in data.missing_strings"><code class="negative">{{str}}</code></li>
+    </ul>
+
+    <h5 class="item" ng-if="data.redundant_strings.length > 0">Redundant string literals</h5>
+    <ul>
+        <li ng-repeat="str in data.redundant_strings"><code class="negative">{{str}}</code></li>
+    </ul>
+
+    <h5>Metrics</h5>
+    <ng-metric-table values="[data.metrics]" metrics="metrics" exclude-value="[true]"
+                     extra-class="compact collapsing">
+    </ng-metric-table>
 </div>

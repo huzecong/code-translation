@@ -1,5 +1,7 @@
 'use strict';
 
+const DataURL = "static/data/eval.json.gz";
+
 Array.prototype.back = function () {
     if (this.length === 0) return undefined;
     return this[this.length - 1];
@@ -39,7 +41,7 @@ class FloatMetric extends Metric {
 
 class PortionMetric extends Metric {
     format(value) {
-        return value.correct + " / " + value.total;
+        return value.correct.toFixed(value.digits || 0) + " / " + value.total;
     }
 
     // toValue(value) { return value.correct / value.total; }
@@ -47,6 +49,7 @@ class PortionMetric extends Metric {
 
     difference(lhs, rhs) {
         return {
+            digits: Math.max(lhs.digits || 0, rhs.digits || 0),
             correct: lhs.correct - rhs.correct,
             total: Math.max(lhs.total, rhs.total),
         };
@@ -57,10 +60,19 @@ class ConfusionMatMetric extends Metric {
     format(value) {
         const tp = value.true_positive, fp = value.false_positive, fn = value.false_negative;
         return "P: " + (tp + " / " + (tp + fp)) + ", R: " + (tp + " / " + (tp + fn));
+        // const f1 = this.toValue(value);
+        // return "F1: " + ((f1 * 100).toFixed(2));
     }
 
     toValue(value) {  // F1
+        if (value.f1 !== undefined) return value.f1;
         return 2 * value.true_positive / Math.max(1, 2 * value.true_positive + value.false_positive + value.false_negative);
+    }
+
+    difference(lhs, rhs) {
+        return {
+            f1: this.toValue(lhs) - this.toValue(rhs),
+        };
     }
 }
 
@@ -149,13 +161,14 @@ App.directive('ngMetricTable', function () {
         scope: {
             values: "=",
             metrics: "=",
-            names: "=",
+            names: "=?",
             excludeValue: "=?",
             align: "@?",
+            extraClass: "@?",
         },
         template: `
-            <table class="ui celled definition table metric-table">
-                <thead><tr>
+            <table class="ui celled definition table metric-table {{extraClass ? extraClass : ''}}">
+                <thead><tr ng-if="names.length > 0">
                     <th></th>
                     <th class="center aligned" ng-repeat="x in names">{{x}}</th>
                 </tr></thead>
@@ -180,9 +193,12 @@ App.directive('ngMetricTable', function () {
         `,
         link: function ($scope) {
             $scope.$watchGroup(["names", "metrics", "values"], (newValues, oldValues) => {
-                if (newValues.some(angular.isUndefined)) return;
+                if (angular.isUndefined($scope.metrics) || angular.isUndefined($scope.values))
+                    return;
+                if (angular.isUndefined($scope.names))
+                    $scope.names = [];
                 if (angular.isUndefined($scope.excludeValue))
-                    $scope.excludeValue = $scope.names.map(_ => false);
+                    $scope.excludeValue = $scope.values.map(_ => false);
                 $scope.formattedValues = [];
                 $scope.cellClasses = [];
                 for (const metric of $scope.metrics) {
@@ -336,7 +352,7 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         confusion_mat: ConfusionMatMetric,
     };
 
-    $http.get("static/data/eval.json.gz", {
+    $http.get(DataURL, {
         headers: {
             "Content-Encoding": "gzip",
         },
@@ -572,7 +588,7 @@ App.controller('CompareCtrl', ['State', '$scope', '$document', function (State, 
             $("#system-dropdown-B").dropdown("set selected", a);
         });
     };
-    $scope.$watchCollection("selectedSystem", function () {
+    $scope.$watchCollection("selectedKey", function () {
         if (!$scope.validSelection()) return;
         const [a, b] = $scope.selectedSystem;
         $scope.systemNames = [a.name, b.name];

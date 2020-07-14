@@ -46,11 +46,11 @@
             <i class="dropdown icon"></i>
             <div class="default text">Select Metrics...</div>
             <div class="menu">
-                <div class="item" ng-repeat="metric in metrics" data-value="{{metric.key}}">
+                <div class="item" ng-repeat="metric in metrics track by $index" data-value="{{metric.key}}">
                     <i ng-if="metric.higherIsBetter === true" class="green icon caret up"></i>
                     <i ng-if="metric.higherIsBetter === false" class="red icon caret down"></i>
                     <span class="description">
-                        <a ng-repeat="n in ['L', 'R']"
+                        <a ng-repeat="n in ['L', 'R'] track by $index"
                            class="ui small label {{metricDropdownColor(metric, $index)}}">
                             {{n}}
                             <div class="detail">{{metric.format(metricValues[$index][metric.key])}}</div>

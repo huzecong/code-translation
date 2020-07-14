@@ -11,15 +11,19 @@ div.container.top-margin {
     height: 46px;
 }
 
-div.main {
+div#main {
     height: calc(100vh - 46px);
-    overflow-x: hidden;
+    overflow-x: auto;
     overflow-y: scroll;
     padding-top: 20px;
 }
 
 #example {
     overflow-wrap: break-word;
+}
+
+#example .ui.rail {
+    max-width: 100px;
 }
 
 #example .ui.rail .input {
@@ -48,6 +52,10 @@ div.main {
 #example .checkbox {
     display: block;
     margin: 0 auto 0.5rem !important;
+}
+
+ng-prism pre {
+    max-height: calc(100vh - 50px);
 }
 
 ng-prism pre code .decompiled-var {
@@ -80,12 +88,41 @@ ng-prism pre code .oracle-var {
     margin: 5px;
 }
 
+.ui.table.args-table .no-border-top {
+    border-top: none !important;
+}
+
+.ui.table.args-table .no-border-left {
+    border-left: none !important;
+}
+
+.ui.table.args-table .border-left {
+    border-left: 1px solid rgba(34, 36, 38, 0.1) !important;
+}
+
+.ui.table.args-table .no-border {
+    border: none !important;
+}
+
+.ui.table.args-table td.index {
+    padding-right: 0.2em !important;
+}
+
+.ui.table.args-table td.label {
+    padding-left: 0.2em !important;
+    padding-right: 0 !important;
+}
+
+.ui.table.args-table td > code {
+    overflow-wrap: anywhere;
+}
+
 
 /* Sticky table headers */
 .ui.definition.table thead tr:first-child > th:not(:first-child) {
     position: -webkit-sticky !important;
     position: sticky !important;
-    top: -20px; /* to offset the 20px padding-top in .main */
+    top: -20px; /* to offset the 20px padding-top in #main */
     margin-bottom: 41px; /* offset for the default height of a row */
     z-index: 2;
     border-top: 1px solid rgba(34, 36, 38, 0.15);
