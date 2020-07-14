@@ -1,5 +1,40 @@
 <div id="summary" class="ui vertical segment" ng-controller="SummaryCtrl">
     <h2 class="ui dividing header">Summary</h2>
+
+    <h3>Select systems to display</h3>
+    <ng-accordion id="summary-page" default-active="false">
+        <ng-accordion-entry id="system-tags" name="System Tags">
+            <div class="tag-checkbox-container">
+                <div class="ui checkbox tag-checkbox" ng-repeat="tag in sortedTags">
+                    <input type="checkbox" data-tag="{{tag}}"> <label>{{tag}}</label>
+                </div>
+            </div>
+        </ng-accordion-entry>
+        <ng-accordion-entry id="system-descr" name="System Descriptions">
+            <table class="ui definition table">
+                <thead>
+                <tr>
+                    <th></th>
+                    <th>Name</th>
+                    <th>Description</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr ng-repeat="system in systems">
+                    <td class="collapsing">
+                        <div class="ui fitted checkbox">
+                            <input type="checkbox" ng-model="selectedSystem[$index]"><label></label>
+                        </div>
+                    </td>
+                    <td>{{system.name}}</td>
+                    <td>{{system.description}}</td>
+                </tr>
+                </tbody>
+            </table>
+        </ng-accordion-entry>
+    </ng-accordion>
+
+    <h3>Metrics</h3>
     <ng-metric-table values="summaryValues" metrics="summaryMetrics" names="summaryNames" align="center">
     </ng-metric-table>
 </div>

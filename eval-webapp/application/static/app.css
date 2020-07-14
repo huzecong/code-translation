@@ -70,6 +70,16 @@ ng-prism pre code .oracle-var {
     max-height: 300px;
 }
 
+.tag-checkbox-container {
+    display: flex;
+    justify-content: space-evenly;
+    flex-wrap: wrap;
+}
+
+.tag-checkbox-container > .tag-checkbox {
+    margin: 5px;
+}
+
 
 /* Sticky table headers */
 .ui.definition.table thead tr:first-child > th:not(:first-child) {

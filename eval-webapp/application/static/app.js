@@ -261,7 +261,7 @@ App.controller('AccordionCtrl', ['State', '$scope', '$element', function (State,
                 if (angular.isUndefined($scope.defaultActive))
                     $scope.defaultActive = false;
                 if (angular.isUndefined($scope.exclusive))
-                    $scope.exclusive = true;
+                    $scope.exclusive = false;
                 $scope.$$postDigest(() => $element.accordion({
                     exclusive: $scope.exclusive,
                 }));
@@ -426,9 +426,50 @@ App.controller('MainCtrl', ['State', '$route', '$scope', '$timeout', function (S
 }]);
 
 App.controller('SummaryCtrl', ['State', '$scope', function (State, $scope) {
+    $scope.systems = State.getSystems();
+    $scope.tags = {};
+    $scope.systems.forEach((system, idx) => system.tags.forEach(tag => {
+        let indices = $scope.tags[tag];
+        if (indices === undefined) $scope.tags[tag] = indices = [];
+        indices.push(idx);
+    }));
+    $scope.sortedTags = Object.keys($scope.tags).sort();
+    $scope.selectedTag = Object.fromEntries(Object.keys($scope.tags).map(tag => [tag, true]));
+    $scope.selectedSystem = State.getSystems().map(_ => true);
     $scope.summaryNames = State.getSystems().map(system => system.name);
     $scope.summaryValues = State.getSystems().map(system => system.metrics);
     $scope.summaryMetrics = State.getMetrics().filter(metric => metric.displayInSummary);
+
+    $scope.$watchCollection("selectedSystem", () => {
+        $scope.summaryNames = [];
+        $scope.summaryValues = [];
+        for (let idx = 0; idx < $scope.systems.length; ++idx) {
+            if (!$scope.selectedSystem[idx]) continue;
+            const system = $scope.systems[idx];
+            $scope.summaryNames.push(system.name);
+            $scope.summaryValues.push(system.metrics);
+        }
+
+        for (let tag in $scope.tags) {
+            const indices = $scope.tags[tag];
+            const count = indices.reduce((acc, idx) => acc + $scope.selectedSystem[idx], 0);
+            const $checkbox = $("input[data-tag='" + tag + "']").parent();
+            const status = (count === indices.length ? 'checked' : (count === 0 ? 'unchecked' : 'indeterminate'));
+            $checkbox.checkbox('set ' + status);
+        }
+    });
+
+    $scope.$$postDigest(() => {
+        $(".ui.checkbox.tag-checkbox").checkbox("set checked").checkbox({
+            onChange: function () {
+                const $this = $(this);
+                const tag = $this.attr("data-tag");
+                const value = $this.parent().checkbox("is checked");
+                console.log($this, tag, value);
+                $scope.$apply(() => $scope.tags[tag].forEach(idx => $scope.selectedSystem[idx] = value));
+            },
+        });
+    });
 }]);
 
 App.controller('ExampleCtrl', ['State', '$location', '$route', '$routeParams', '$scope', '$timeout', function (State, $location, $route, $routeParams, $scope, $timeout) {
