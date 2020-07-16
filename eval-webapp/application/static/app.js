@@ -149,7 +149,7 @@ App.directive('ngCheck', function () {
         transclude: true,
         template: `
             <span ng-style="{color: cond || pred == label ? 'green' : 'red'}">
-                <code>{{pred}}</code> {{cond || pred == label ? '✓' : '✗'}} <span ng-transclude></span>
+                <code>{{pred || "&lt;parse failed&gt;"}}</code> {{cond || pred == label ? '✓' : '✗'}} <span ng-transclude></span>
             </span>
         `,
     };

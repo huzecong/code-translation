@@ -438,7 +438,8 @@ class CProcessor:
         # Function name and return type is represented as a variable declaration before '('.
         ret_type, func_name = parse_vardef(0, arg_lparen_pos - 1)
         # Arguments are separated by ',' within arguments '()'.
-        if arg_lparen_pos + 1 == arg_rparen_pos or code[arg_lparen_pos + 1] == "void":
+        args_code_tokens = code[(arg_lparen_pos + 1):arg_rparen_pos]
+        if args_code_tokens == [] or args_code_tokens == ["void"]:
             args = []
         else:
             if arg_rparen_pos == body_lbrace_pos - 1:
@@ -861,8 +862,7 @@ class Evaluator:
             func_sig = CProcessor.parse_func(tokens, syntax_correct=syntax_correct)
         except:
             parsable = False
-            func_sig = CProcessor.FuncSignature(
-                CProcessor.TypeSignature(["<parse failed>"], False), "<parse failed>", [])
+            func_sig = CProcessor.FuncSignature(CProcessor.TypeSignature([""], False), "", [])
         return tokens, func_sig, parsable
 
     @staticmethod
