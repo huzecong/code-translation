@@ -722,7 +722,7 @@ class Evaluator:
         pointer_conversion: Dict[str, Tuple[bool, bool]]  # (tgt_var_name) -> (should_convert, did_convert)
 
     def _compare_strings(self, a: str, b: str) -> float:
-        return 1.0 - cotra.utils.edit_distance(a, b, swap=1) / max(len(a), len(b))
+        return 1.0 - cotra.utils.edit_distance(a, b, swap=1) / max(len(a), len(b), 1)
 
     def _compare_types(self, a: CProcessor.TypeSignature, b: CProcessor.TypeSignature, strict: bool = False) -> float:
         a_type = CProcessor.normalize_type(a.type, cv_qualifiers=strict)
