@@ -28,9 +28,10 @@ def get_lr_scheduler(optim: torch.optim.Optimizer,
     elif lr_config["schedule"] == "invsqrt":
         # Inverse square root
         def lr_lambda(step: int) -> float:
-            if step < warmup_steps:
-                return step / max(1, warmup_steps)
-            return 1 / math.sqrt(max(1, step - warmup_steps))
+            # if step < warmup_steps:
+            #     return step / max(1, warmup_steps)
+            # return 1 / math.sqrt(max(1, step - warmup_steps))
+            return min(1.0, step / warmup_steps) * (1 / math.sqrt(max(step, warmup_steps)))
 
     elif lr_config["schedule"] == "exponential":
         # Exponential (scale by constant every few iterations)

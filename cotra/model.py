@@ -41,7 +41,6 @@ class Seq2seq(tx.ModuleBase):
 
         transformer_hparams = {
             "dim": hidden_dim,
-            "num_blocks": 6,
             "multihead_attention": {
                 "num_heads": 8,
                 "output_dim": hidden_dim
@@ -53,16 +52,20 @@ class Seq2seq(tx.ModuleBase):
             "poswise_feedforward": tx.modules.default_transformer_poswise_net_hparams(
                 input_dim=hidden_dim, output_dim=hidden_dim),
         }
-        self.encoder = tx.modules.TransformerEncoder(hparams=transformer_hparams)
+        self.encoder = tx.modules.TransformerEncoder(hparams={
+            **transformer_hparams,
+            "num_blocks": self._hparams.num_encoder_layers})
         if self._hparams.decoder == "transformer":
             self.decoder = tx.modules.TransformerDecoder(
                 token_pos_embedder=self._embedding_fn, vocab_size=vocab.size,
-                output_layer=self.word_embedder.embedding, hparams=transformer_hparams)
+                output_layer=self.word_embedder.embedding, hparams={
+                    **transformer_hparams,
+                    "num_blocks": self._hparams.num_decoder_layers})
         elif self._hparams.decoder == "lstm":
             rnn_hparams = tx.modules.AttentionRNNDecoder.default_hparams()
             rnn_hparams['rnn_cell'].update({
                 "kwargs": {"num_units": hidden_dim},
-                "num_layers": 2,
+                "num_layers": self._hparams.num_decoder_layers,
                 "dropout": {
                     "input_keep_prob": 0.9,
                     "state_keep_prob": 0.9,
@@ -88,6 +91,8 @@ class Seq2seq(tx.ModuleBase):
     def default_hparams():
         return {
             "decoder": "transformer",  # ["transformer", "lstm"]
+            "num_encoder_layers": 6,
+            "num_decoder_layers": 6,
             "hidden_dim": 512,
             "max_sentence_length": 1024,
             "loss_label_confidence": 0.9,

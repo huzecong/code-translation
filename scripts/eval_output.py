@@ -657,7 +657,8 @@ class JSONExporter(BaseExporter):
         }
         with open(self.export_path, "w") as f:
             json.dump(json_dict, f)
-        os.remove(self.export_path + ".gz")
+        if os.path.exists(self.export_path + ".gz"):
+            os.remove(self.export_path + ".gz")
         flutes.run_command(["gzip", "--best", "--keep", self.export_path])
 
 

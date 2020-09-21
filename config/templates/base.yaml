@@ -18,10 +18,12 @@ model:
   hidden_dim: 512
   max_sentence_length: 512
   loss_label_confidence: 0.9
+  num_encoder_layers: 6
+  num_decoder_layers: 6
 
 lr_scheduler:
   schedule: invsqrt
-  lr: 7.0e-4
+  lr: 0.0883
   warmup_steps: 16000
 
 training:

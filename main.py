@@ -92,9 +92,9 @@ def main() -> None:
             "curriculum": {"enabled": args.curriculum},
             "verbose": config["data"]["verbose"],
             "num_parallel_calls": args.n_procs,
-            "lazy_strategy": "all",
-            "cache_strategy": "none",
-            "shuffle_buffer_size": 4096,
+            # "lazy_strategy": "all",
+            # "cache_strategy": "none",
+            # "shuffle_buffer_size": 4096,
         })
     eval_splits: Dict[str, Dict[str, str]] = {
         "valid": config["data"]["valid_sets"],
@@ -127,6 +127,9 @@ def main() -> None:
     training_config = config["training"]
     test_output_path = output_dir / "test.output"
     valid_set = next(iter(eval_datasets["valid"].values()))  # only validate on first valid split
+    actions_on_plateau = []
+    if lr_config.get("lr_decay", 0.0) > 0.0:
+        actions_on_plateau.append(tx.run.action.scale_lr(lr_config["lr_decay"]))
     executor = Executor(
         model=model,
         train_data=train_dataset,
@@ -146,6 +149,8 @@ def main() -> None:
                    "({progress}%, {speed}), lr = {lr:.3e}, loss = {loss:.3f}",
         valid_metrics=cotra.utils.WordPieceBLEU(vocab, decode=True, encoding="spm",
                                                 sample_output_per=len(valid_set) // 10),
+        plateau_condition=cond.validation(better=False),
+        action_on_plateau=actions_on_plateau,
         test_metrics=[cotra.utils.FileBLEU(vocab, test_output_path, encoding="spm"),
                       ("unofficial_bleu", cotra.utils.WordPieceBLEU(vocab, decode=True, encoding="spm"))],
         valid_log_format="{time} : Epoch {epoch}, {split} BLEU = {BLEU:.3f}",

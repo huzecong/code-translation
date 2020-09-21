@@ -2,3 +2,5 @@
   path: "templates/base.yaml"
   overrides:
     - !include "templates/varname_orig.yaml"
+    - training:
+        max_batch_tokens: 3800
