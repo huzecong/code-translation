@@ -359,11 +359,14 @@ App.factory('State', ['$http', '$timeout', function ($http, $timeout) {
         responseType: "arraybuffer",
     }).then(response => {
         let data = response.data;
-        if (response.headers("content-type") === "application/json") {
-            // Manually parse data if the server does not support compressed HTTP response (e.g., local server).
+        try {
+            data = JSON.parse(new TextDecoder().decode(data));
+        } catch (e) {
+            // We don't know what the server would do. It may or may not present the gzip-ed file as a compressed
+            // response. Manually parse data if the server does not do so.
             data = pako.inflate(response.data);
+            data = JSON.parse(new TextDecoder().decode(data));
         }
-        data = JSON.parse(new TextDecoder().decode(data));
         state.examples = data.examples;
         state.metrics = [];
         for (const metric of data.metrics)
@@ -728,7 +731,8 @@ App.controller('CompareCtrl', ['State', '$scope', '$document', function (State, 
 
 
     // Load persistent state & initialize Semantic UI DOM elements.
-    if (angular.isDefined(persistentState.selectedKey)) {
+    if (angular.isDefined(persistentState.selectedKey)
+        && persistentState.selectedKey.every(key => $scope.systems.find(system => system.key === key) !== undefined)) {
         $scope.selectedKey = persistentState.selectedKey;
         $scope.selectedSystem = fromKeys($scope.systems, persistentState.selectedKey);
         $scope.selectedMetricKeys = persistentState.selectedMetricKeys;
