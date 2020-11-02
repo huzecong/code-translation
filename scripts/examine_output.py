@@ -1,4 +1,5 @@
 import pickle
+from pathlib import Path
 from typing import List, Tuple, Iterator, overload, Any
 
 import flutes
@@ -14,10 +15,10 @@ from cotra.utils.metric import DecodeMixin
 
 
 class Args(Arguments):
-    data_file: str = "data/processed/test.txt"  # original dataset
+    data_file: str = "data_canonical/test.txt"  # original dataset
     # hyp_names: str  # comma separated
     # hyp_files: str  # hypotheses, comma separated
-    overlap_score_files: str = "data/processed/overlap_test.txt"  # overlap scores for test set, comma separated
+    overlap_score_files: str = "data_canonical/overlap_test.txt"  # overlap scores for test set, comma separated
     pickle_file: str = "test_output.pkl"
 
 
@@ -160,6 +161,15 @@ def batch_compute_edit_score(src: str, tgt: str, hyp: str,
     return scores
 
 
+def get_tranx_path(varname: str, beam_size: int, finetune: bool = False, train_file: str = "tranx_data"):
+    model_name = f"model.transformer.beam_size{beam_size}.canonical.var_{varname}." \
+                 f"input_action_seq.vocab.pkl.{train_file}.bin"
+    if finetune:
+        model_name = "model.finetune." + model_name + ".train_extra.bin"
+    model_name = "../tranX/decodes/c/" + model_name + f".test.beam_size{beam_size}.max_time1000.decode.txt"
+    return model_name
+
+
 def main():
     args = Args()
     flutes.register_ipython_excepthook()
@@ -171,46 +181,44 @@ def main():
         # (name, is_finetune?)
         ("Seq2seq-D", False),
         ("Seq2seq-O", False),
-        ("Seq2seq-D+Finetune", True),
-        ("Seq2seq-O+Finetune", True),
-        ("TranX-O-Greedy", False),
-        ("TranX-O-Beam5", False),
-        ("TranX-t2t-D-Greedy", False),
-        ("TranX-t2t-D-Beam5", False),
-        ("TranX-t2t-O-Greedy", False),
-        ("TranX-t2t-O-Beam5", False),
-        ("TranX-t2t-D-Greedy+Finetune", True),
-        ("TranX-t2t-D-Beam5+Finetune", True),
-        ("TranX-t2t-O-Greedy+Finetune", True),
-        ("TranX-t2t-O-Beam5+Finetune", True),
+        # ("Seq2seq-D+Finetune", True),
+        # ("Seq2seq-O+Finetune", True),
+        ("TranX-BPE-D-Greedy", False),
+        ("TranX-BPE-D-Beam5", False),
+        ("TranX-BPE-O-Greedy", False),
+        ("TranX-BPE-O-Beam5", False),
+        # ("TranX-t2t-D-Greedy+Finetune", True),
+        # ("TranX-t2t-D-Beam5+Finetune", True),
+        # ("TranX-t2t-O-Greedy+Finetune", True),
+        # ("TranX-t2t-O-Beam5+Finetune", True),
+        ("Seq2seq-D-Small", False),
+        ("Tree2tree", False),
+        ("Tree2tree-BPE", False),
+        ("TranX-Small-D-Greedy", False),
     ]
     names = [name for name, _ in systems]
-    tranx_model_name_1 = ("model.sup.c.var_original.hidden256.embed128.action128.field64.type64.dropout0.3.lr0.001."
-                          "lr_decay0.5.beam_size15.vocab.pkl.tranx_data.seed19260817.bin")
-    tranx_model_name_2 = "model.transformer.2.c.var_{varname}.input_action_seq.vocab.pkl.tranx_data_src_ast.bin"
-    tranx_model_name_3 = "model.transformer.finetune.c.var_{varname}.input_action_seq.vocab.pkl.train_extra.bin"
-    tranx_model_names = [  # (name, beam_size)
-        (tranx_model_name_1, 1),
-        (tranx_model_name_1, 5),
-        (tranx_model_name_2.format(varname="decompiled"), 1),
-        (tranx_model_name_2.format(varname="decompiled"), 5),
-        (tranx_model_name_2.format(varname="original"), 1),
-        (tranx_model_name_2.format(varname="original"), 5),
-        (tranx_model_name_3.format(varname="decompiled"), 1),
-        (tranx_model_name_3.format(varname="decompiled"), 5),
-        (tranx_model_name_3.format(varname="original"), 1),
-        (tranx_model_name_3.format(varname="original"), 5),
-    ]
     hyp_paths = [
-        "outputs_decomp_varname/test_default.hyp.orig",
-        "outputs_orig_varname/test_default.hyp.orig",
-        "outputs_decomp_varname_finetune/test_default.hyp.orig",
-        "outputs_orig_varname_finetune/test_default.hyp.orig",
-        *[f"../tranX/decodes/c/{name}.test.beam_size{beam_size}.max_time1000.decode.txt"
-          for name, beam_size in tranx_model_names],
+        "outputs_canon_new_decomp/test_default.hyp.orig",
+        "outputs_canon_new_orig/test_default.hyp.orig",
+        # "outputs_decomp_varname_finetune/test_default.hyp.orig",
+        # "outputs_orig_varname_finetune/test_default.hyp.orig",
+        get_tranx_path("decompiled", beam_size=1),
+        get_tranx_path("original", beam_size=1),
+        get_tranx_path("decompiled", beam_size=5),
+        get_tranx_path("original", beam_size=5),
+        # get_tranx_path("decompiled", beam_size=1, finetune=True),
+        # get_tranx_path("original", beam_size=1, finetune=True),
+        # get_tranx_path("decompiled", beam_size=5, finetune=True),
+        # get_tranx_path("original", beam_size=5, finetune=True),
+        "outputs_canon_new_decomp_small/test_default.hyp.orig",
+        "../Tree2Tree-master/test_lr1e-3_139570.pkl.txt",
+        "../Tree2Tree-master/test_bpe_64000.pkl.txt",
+        get_tranx_path("decompiled", beam_size=1, train_file="tranx_data_small"),
     ]
-    overlap_paths = ["data/processed/" + ("overlap_test.txt" if not is_finetune else "overlap_extra_test.txt")
-                     for _, is_finetune in systems]
+    # overlap_paths = ["data_canonical/" + ("overlap_test.txt" if not is_finetune else "overlap_extra_test.txt")
+    #                  for _, is_finetune in systems]
+    scores = [float(x) for x in read_lines("test_overlap.txt", verbose=False)]
+    overlap_paths = ["test_overlap.txt" for _ in systems]
     assert len(names) == len(hyp_paths)
     print("\n".join(f"{name}:   {path}" for name, path in zip(names, hyp_paths)))
     hyp_data = {}
@@ -219,25 +227,36 @@ def main():
     if len(overlap_paths) == 1:
         overlap_paths = overlap_paths * len(names)
     assert len(overlap_paths) == len(names)
-    overlap_scores = {}
-    for name, overlap_path in zip(names, overlap_paths):
-        scores = [float(x) for x in read_lines(overlap_path, verbose=False)]
-        overlap_scores[name] = scores
-    # for idx, (tgt, ref) in enumerate(zip(tgt_data, ref_data)):
-    #     if tgt != ref and "<unk>" not in ref:
-    #         print(idx)
-    #         print(tgt)
-    #         print(ref)
-    #         assert False
-    # assert tgt_data == ref_data
+    overlap_scores = {name: scores for name in names}
+
     assert len(src_data) == len(tgt_data) == len(additional_data)
     assert len(overlap_scores) == len(names) == len(hyp_data)
     assert all(len(data) == len(src_data) == len(scores)
                for data, scores in zip(hyp_data.values(), overlap_scores.values()))
 
-    with open(args.pickle_file, "wb") as f:
+    pickle_file = Path(args.pickle_file)
+    with pickle_file.open("wb") as f:
         obj = (names, src_data, tgt_data, hyp_data, overlap_scores, additional_data)
         pickle.dump(obj, f)
+    print(f"File written to {pickle_file}")
+
+    # # Separate pickles for examples with overlap scores <= 0.5 or > 0.5
+    # similar_indices = [idx for idx, score in enumerate(scores) if score > 0.5]
+    # dissimilar_indices = [idx for idx, score in enumerate(scores) if score <= 0.5]
+    # for indices, suffix in [(similar_indices, "similar"), (dissimilar_indices, "dissimilar")]:
+    #     file = pickle_file.with_name(pickle_file.name + "_" + suffix)
+    #     with file.open("wb") as f:
+    #         obj = (
+    #             names,
+    #             [src_data[i] for i in indices],
+    #             [tgt_data[i] for i in indices],
+    #             {name: [data[i] for i in indices] for name, data in hyp_data.items()},
+    #             {name: [data[i] for i in indices] for name, data in overlap_scores.items()},
+    #             [additional_data[i] for i in indices],
+    #         )
+    #         pickle.dump(obj, f)
+    #     print(f"File written to {file}")
+
 
     return
 

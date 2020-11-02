@@ -1,0 +1,5 @@
+!template
+  path: "templates/base.yaml"
+  overrides:
+    - !include "templates/finetune.yaml"
+    - !include "templates/varname_decomp.yaml"

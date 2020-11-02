@@ -1,0 +1,11 @@
+!template
+  path: "templates/base.yaml"
+  overrides:
+    - !include "templates/varname_decomp.yaml"
+    - training:
+        max_batch_tokens: 3800
+    - data:
+        training_set: "data/train_small.txt"
+    - model:
+        num_encoder_layers: 3
+        num_decoder_layers: 3

@@ -5,18 +5,18 @@ import os
 import pickle
 import string
 from collections import Counter, OrderedDict, defaultdict
-from typing import (Any, Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple,
-                    TypeVar, overload, Union)
+from typing import (Any, Callable, Dict, Generic, Iterable, List, Mapping, NamedTuple, Optional, Set, Tuple, TypeVar,
+                    Union, overload)
 
 import flutes
+import networkx as nx
 import numpy as np
 import texar.torch as tx
 from argtyped import Arguments
-from termcolor import colored
-from tqdm import trange
-from typing_extensions import Literal
-import networkx as nx
 from networkx.algorithms import bipartite
+from termcolor import colored
+from tqdm import tqdm
+from typing_extensions import Literal
 
 import cotra
 from cotra.parse import LexToken, Lexer
@@ -249,9 +249,12 @@ class Stats:
 
     METRICS = [
         Metric("bleu4", "BLEU4", type="float", formatter={"fixed": 2}, higher_is_better=True, display_in_example=True),
+        Metric("bleu4_sent", "Sent BLEU4", type="float", formatter={"fixed": 2}, higher_is_better=True),
         Metric("bleu8", "BLEU8", type="float", formatter={"fixed": 2}, higher_is_better=True, display_in_example=True),
         Metric("bleu4_no_var", "BLEU4 (ignoring identifiers)", type="float",
                formatter={"fixed": 2}, higher_is_better=True, display_in_example=True),
+        Metric("exact_match", "Exact match", type="portion", formatter={"fixed": 4}, higher_is_better=True,
+               display_in_example=True),
         Metric("overlap_score", "Similarity score", type="float",
                formatter={"fixed": 3}, display_in_summary=False, display_in_example=True),
         Metric("unparsable", "Unparsable function signature", type="portion", higher_is_better=False),
@@ -282,6 +285,7 @@ class Stats:
     bleu8: float
     bleu4_no_var: float
     overlap_score: float
+    exact_match: Portion
 
     unparsable: Portion
     func_name: Portion
@@ -593,7 +597,7 @@ class JSONExporter(BaseExporter):
         for hyp_idx, (hyp_arg_type, hyp_arg_name) in enumerate(hyp.args):
             tgt_idx = is_correct.match_idx[hyp_idx]
             arg_json: JSON = {
-                "type":  " ".join(hyp_arg_type.type),
+                "type": " ".join(hyp_arg_type.type),
                 "name": hyp_arg_name,
                 "match_idx": tgt_idx,
                 "name_score": is_correct.arg_names[hyp_idx],
@@ -674,30 +678,30 @@ class Evaluator:
 
     SYSTEMS = [
         System("decompiled", "Decompiled", "Code produced by the decompiler", use_var_map=True),
-        System("seq2seq_d", "Seq2seq-D", tags=["Seq2seq", "Decompiled var name", "Beam width 5"]),
-        System("seq2seq_o", "Seq2seq-O", tags=["Seq2seq", "Oracle var name", "Beam width 5"]),
-        System("seq2seq_d_ft", "Seq2seq-D +FT", tags=["Seq2seq", "Decompiled var name", "Fine-tuned", "Beam width 5"]),
-        System("seq2seq_o_ft", "Seq2seq-O +FT", tags=["Seq2seq", "Oracle var name", "Fine-tuned", "Beam width 5"]),
+        System("seq2seq_d", "Seq2seq-D", tags=["Seq2seq", "Decompiled names", "Beam width 5"]),
+        System("seq2seq_o", "Seq2seq-O", tags=["Seq2seq", "Oracle names", "Beam width 5"]),
+        # System("seq2seq_d_ft", "Seq2seq-D +FT", tags=["Seq2seq", "Decompiled var name", "Fine-tuned", "Beam width 5"]),
+        # System("seq2seq_o_ft", "Seq2seq-O +FT", tags=["Seq2seq", "Oracle var name", "Fine-tuned", "Beam width 5"]),
         # System("tranx_d_greedy", "TranX-D Greedy", tags=["TranX", "Decompiler var names", "Greedy decoding"]),
         # System("tranx_d_beam5", "TranX-D Beam5", tags=["TranX", "Decompiler var names", "Beam width 5"]),
-        System("tranx_o_greedy", "TranX-O Greedy", tags=["TranX", "Oracle var name", "Greedy decoding"]),
-        System("tranx_o_beam5", "TranX-O Beam5", tags=["TranX", "Oracle var name", "Beam width 5"]),
-        System("tranx_t2t_d_greedy", "TranX-t2t-D Greedy",
-               tags=["TranX", "Tree2tree", "Decompiled var name", "Greedy decoding"]),
-        System("tranx_t2t_d_beam5", "TranX-t2t-D Beam5",
-               tags=["TranX", "Tree2tree", "Decompiled var name", "Beam width 5"]),
-        System("tranx_t2t_o_greedy", "TranX-t2t-O Greedy",
-               tags=["TranX", "Tree2tree", "Oracle var name", "Greedy decoding"]),
-        System("tranx_t2t_o_beam5", "TranX-t2t-O Beam5",
-               tags=["TranX", "Tree2tree", "Oracle var name", "Beam width 5"]),
-        System("tranx_t2t_d_greedy_ft", "TranX-t2t-D +FT Greedy",
-               tags=["TranX", "Tree2tree", "Decompiled var name", "Greedy decoding", "Fine-tuned"]),
-        System("tranx_t2t_d_beam5_ft", "TranX-t2t-D +FT Beam5",
-               tags=["TranX", "Tree2tree", "Decompiled var name", "Beam width 5", "Fine-tuned"]),
-        System("tranx_t2t_o_greedy_ft", "TranX-t2t-O +FT Greedy",
-               tags=["TranX", "Tree2tree", "Oracle var name", "Greedy decoding", "Fine-tuned"]),
-        System("tranx_t2t_o_beam5_ft", "TranX-t2t-O +FT Beam5",
-               tags=["TranX", "Tree2tree", "Oracle var name", "Beam width 5", "Fine-tuned"]),
+        # System("tranx_o_greedy", "TranX-O Greedy", tags=["TranX", "Oracle var name", "Greedy decoding"]),
+        # System("tranx_o_beam5", "TranX-O Beam5", tags=["TranX", "Oracle var name", "Beam width 5"]),
+        System("tranx_bpe_d_greedy", "TranX-BPE-D Greedy", tags=["TranX", "TreeBPE", "Decompiled names", "Greedy"]),
+        System("tranx_bpe_d_beam5", "TranX-BPE-D Beam5", tags=["TranX", "TreeBPE", "Decompiled names", "Beam width 5"]),
+        System("tranx_bpe_o_greedy", "TranX-BPE-O Greedy", tags=["TranX", "TreeBPE", "Oracle names", "Greedy"]),
+        System("tranx_bpe_o_beam5", "TranX-BPE-O Beam5", tags=["TranX", "TreeBPE", "Oracle names", "Beam width 5"]),
+        # System("tranx_t2t_d_greedy_ft", "TranX-t2t-D +FT Greedy",
+        #        tags=["TranX", "Tree2tree", "Decompiled var name", "Greedy decoding", "Fine-tuned"]),
+        # System("tranx_t2t_d_beam5_ft", "TranX-t2t-D +FT Beam5",
+        #        tags=["TranX", "Tree2tree", "Decompiled var name", "Beam width 5", "Fine-tuned"]),
+        # System("tranx_t2t_o_greedy_ft", "TranX-t2t-O +FT Greedy",
+        #        tags=["TranX", "Tree2tree", "Oracle var name", "Greedy decoding", "Fine-tuned"]),
+        # System("tranx_t2t_o_beam5_ft", "TranX-t2t-O +FT Beam5",
+        #        tags=["TranX", "Tree2tree", "Oracle var name", "Beam width 5", "Fine-tuned"]),
+        System("seq2seq_d_small", "Seq2seq-D-Small", tags=["Seq2seq", "Oracle names", "Beam width 5", "Small dataset"]),
+        System("tree2tree", "Tree2Tree", tags=["Tree2Tree", "Decompiled names", "Small dataset"]),
+        System("tree2tree_bpe", "Tree2Tree-BPE", tags=["Tree2Tree", "TreeBPE", "Decompiled names", "Small dataset"]),
+        System("tranx_d_small_greedy", "TranX-D-Small Greedy", tags=["TranX", "Decompiled names", "Small dataset"]),
     ]
 
     def __init__(self, exporter: Optional[BaseExporter] = None):
@@ -916,6 +920,7 @@ class Evaluator:
             cur_stats.bleu4_no_var = tx.evals.sentence_bleu(
                 [tgt_tokens_no_var], hyp_tokens_no_var, max_order=4, smooth=True)
             cur_stats.overlap_score = overlap_scores.get(name, 0.0)
+            cur_stats.exact_match = Portion([tgt_tokens == hyp_tokens])
             cur_stats.unparsable = Portion([not parsable])
             cur_stats.func_name = Portion([is_correct_hyp.func_name])
             cur_stats.ret_type = Portion([is_correct_hyp.ret_type])
@@ -950,9 +955,13 @@ class Evaluator:
         references_no_var = [[tgt] for tgt in self.references_no_var]
         summary_table_cols: List[List[str]] = []
         for name, stats in self.summary_stats.items():
+            stats.bleu4_sent = stats.bleu4 / len(references)
             stats.bleu4 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=4)
             stats.bleu8 = tx.evals.corpus_bleu(references, self.hypotheses[name], max_order=8)
             stats.bleu4_no_var = tx.evals.corpus_bleu(references_no_var, self.hypotheses_no_var[name], max_order=4)
+            # stats.bleu4 /= len(references)
+            # stats.bleu8 /= len(references)
+            # stats.bleu4_no_var /= len(references)
             summary_table_cols.append([name] + [
                 Stats.format(metric, getattr(stats, metric.key))
                 for metric in Stats.METRICS if metric.display_in_summary])
@@ -983,6 +992,7 @@ def main():
     flutes.register_ipython_excepthook()
     with open(args.test_file, "rb") as f:
         data = InputData(*pickle.load(f))
+    data_size = len(data.src_data)
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
@@ -996,12 +1006,28 @@ def main():
         [[system.name, name] for name, system in name_map.items()])
     print(name_table.to_str())
 
-    for file_name, max_size in [("eval-small", 50), ("eval", len(data.src_data))]:
-    # for file_name, max_size in [("eval-small", 50)]:
-        # exporter = HTMLExporter(os.path.join(args.output_dir, file_name + ".html"), data.names)
-        exporter = JSONExporter(os.path.join(args.output_dir, file_name + ".json"), Stats.METRICS, Evaluator.SYSTEMS)
+    eval_versions = [
+        ("eval-small", lambda idx: idx < 50),
+        ("eval", lambda _: True),
+    ]
+    with open("test_sizes.txt", "r") as f:
+        scores = [float(line.strip()) for line in f]
+    cut_off_scores = np.percentile(scores, np.arange(0, 100, 20)).tolist() + [max(scores) + 1]
+
+    def _make_percentile_predicate_fn(l, r) -> Callable[[int], bool]:
+        return lambda idx: l <= scores[idx] < r
+
+    for per_idx, (l, r) in enumerate(zip(cut_off_scores, cut_off_scores[1:])):
+        percentile = 100 // (len(cut_off_scores) - 1) * (per_idx + 1)
+        eval_versions.append((f"eval-percentile-{percentile}", _make_percentile_predicate_fn(l, r)))
+
+    for file_name, predicate_fn in eval_versions:
+        json_path = os.path.join(args.output_dir, file_name + ".json")
+        print(f"\nGenerating {json_path}")
+        exporter = JSONExporter(json_path, Stats.METRICS, Evaluator.SYSTEMS)
         evaluator = Evaluator(exporter=exporter)
-        for idx in trange(max_size):
+        indices = list(filter(predicate_fn, range(data_size)))
+        for idx in tqdm(indices):
             var_names, score, repo, sha = data.additional_data[idx]
             var_map = {}
             if var_names != "":
